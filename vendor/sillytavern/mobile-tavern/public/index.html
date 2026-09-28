@@ -1,0 +1,193 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="midnight" data-layout="document">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+    <meta name="theme-color" content="#071316">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="移动酒馆">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; connect-src https://api.deepseek.com; img-src 'self' data: blob:; style-src 'self'; script-src 'self'; manifest-src 'self'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'">
+    <title>移动酒馆</title>
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="icon" href="./icon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+    <div class="app-shell">
+        <header class="topbar">
+            <div class="brand-mark" aria-hidden="true">M</div>
+            <div class="brand-copy">
+                <strong id="characterTitle">移动酒馆</strong>
+                <span><i id="statusDot" class="status-dot"></i><span id="statusText">等待 API 密钥</span><b class="status-separator">·</b><span id="chapterStatus">尚未开始</span></span>
+            </div>
+            <button id="newChatButton" class="icon-button" title="新聊天" aria-label="新聊天">＋</button>
+            <button id="settingsButton" class="icon-button" title="设置" aria-label="打开设置">☰</button>
+        </header>
+
+        <main id="chat" class="chat" aria-live="polite">
+            <section class="welcome-card">
+                <span class="eyebrow">MOBILE TAVERN · PREVIEW</span>
+                <h1>你的故事，由你决定</h1>
+                <p>创建或导入角色卡与世界书，让故事以清晰的节点、状态和行动选择持续推进。</p>
+                <button id="openSetupButton" class="primary-button">开始设置</button>
+            </section>
+        </main>
+
+        <section id="storyDock" class="story-dock" hidden>
+            <details id="storyDockDetails">
+                <summary><span class="dock-mark" aria-hidden="true">◇</span><strong>剧情面板</strong><span id="storyDockMeta">当前节点 · 可选行动</span></summary>
+                <div class="story-dock-content">
+                    <section class="dock-section"><h3>当前节点</h3><div id="nodeDockContent"></div></section>
+                    <section class="dock-section"><h3>可选行动</h3><div id="choicesDockContent"></div></section>
+                </div>
+            </details>
+        </section>
+
+        <form id="composer" class="composer">
+            <textarea id="messageInput" rows="1" placeholder="自由描述行动，或点击上方选项…" enterkeyhint="send"></textarea>
+            <button id="voiceButton" class="voice-button" type="button" title="语音输入" aria-label="语音输入">◉</button>
+            <button id="sendButton" class="send-button" type="submit" aria-label="发送">↑</button>
+        </form>
+    </div>
+
+    <div id="backdrop" class="backdrop" hidden></div>
+    <aside id="settingsPanel" class="settings-panel" aria-hidden="true">
+        <div class="panel-head">
+            <div><span class="eyebrow">CONTROL ROOM</span><h2>酒馆设置</h2></div>
+            <button id="closeSettingsButton" class="icon-button" aria-label="关闭">×</button>
+        </div>
+        <nav class="settings-tabs" aria-label="设置分类">
+            <button class="settings-tab active" type="button" data-settings-tab="story">故事</button>
+            <button class="settings-tab" type="button" data-settings-tab="ai">AI</button>
+            <button class="settings-tab" type="button" data-settings-tab="appearance">外观</button>
+            <button class="settings-tab" type="button" data-settings-tab="data">数据</button>
+        </nav>
+
+        <div class="panel-body">
+            <section class="settings-view active" data-settings-view="story">
+                <div class="section-title first">当前故事</div>
+                <div class="content-summary">
+                    <div><small>当前角色</small><strong id="cardName">未导入</strong></div>
+                    <div><small>当前世界书</small><strong id="worldName">未导入</strong></div>
+                </div>
+
+                <div class="section-title">角色卡</div>
+                <div class="button-grid">
+                    <label class="file-button">导入 PNG / JSON<input id="cardFileInput" type="file" accept="image/png,application/json,.png,.json"></label>
+                    <button id="newCardButton" class="secondary-button" type="button">新建角色卡</button>
+                    <button id="editCardButton" class="secondary-button" type="button">编辑当前角色</button>
+                    <button id="exportCardButton" class="secondary-button" type="button">导出角色卡</button>
+                </div>
+
+                <div class="section-title">世界书</div>
+                <div class="button-grid">
+                    <label class="file-button">导入世界书<input id="worldFileInput" type="file" accept="application/json,.json"></label>
+                    <button id="newWorldButton" class="secondary-button" type="button">新建世界书</button>
+                    <button id="editWorldButton" class="secondary-button" type="button">编辑世界书</button>
+                    <button id="exportWorldButton" class="secondary-button" type="button">导出世界书</button>
+                </div>
+
+                <div class="section-title">剧情辅助</div>
+                <label class="toggle-row"><span>显示底部剧情面板<small>当前节点与可选行动</small></span><input id="storyDockEnabledInput" type="checkbox" checked></label>
+                <label class="toggle-row"><span>智能更新剧情面板<small>每回合额外进行一次状态结算</small></span><input id="analysisEnabledInput" type="checkbox" checked></label>
+
+                <div class="section-title">故事记忆</div>
+                <label class="field"><span>始终记忆</span><textarea id="plotEssentialsInput" rows="5" placeholder="主角身份、核心关系、永久规则等每次都必须记住的内容"></textarea></label>
+                <label class="field"><span>故事摘要</span><textarea id="storySummaryInput" rows="6" placeholder="较早剧情的简要总结，可随时手动修正"></textarea></label>
+                <label class="field"><span>作者备注</span><textarea id="authorNoteInput" rows="4" placeholder="本阶段的氛围、节奏、视角或写作要求"></textarea></label>
+                <details class="advanced-editor">
+                    <summary>高级：全局系统提示</summary>
+                    <label class="field"><span>用户全局提示</span><textarea id="instructionInput" rows="8"></textarea></label>
+                </details>
+            </section>
+
+            <section class="settings-view" data-settings-view="ai">
+                <div class="section-title first">DeepSeek API</div>
+                <label class="field"><span>API 密钥</span><input id="apiKeyInput" type="password" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="sk-…"></label>
+                <label class="toggle-row compact"><span>牢记 API 密钥</span><input id="rememberKeyInput" type="checkbox" checked></label>
+                <p class="security-note">密钥只保存在当前 Safari/PWA 的本机网站数据中。</p>
+                <button id="connectButton" class="primary-button wide">验证 API 密钥</button>
+
+                <div class="section-title">模型与生成</div>
+                <label class="field"><span>模型</span><select id="modelSelect"><option value="deepseek-v4-flash">deepseek-v4-flash</option><option value="deepseek-v4-pro">deepseek-v4-pro</option></select></label>
+                <label class="field"><span>上下文长度 Token</span><input id="contextTokensInput" type="number" min="4096" max="1000000" step="1024" value="100000"></label>
+                <label class="field"><span>最大回复 Token</span><input id="maxTokensInput" type="number" min="256" max="65536" step="128" value="4096"></label>
+                <label class="field"><span>温度</span><input id="temperatureInput" type="number" min="0" max="2" step="0.1" value="1"></label>
+                <label class="toggle-row"><span>启用模型推理</span><input id="thinkingInput" type="checkbox"></label>
+                <p id="contextUsage" class="hint small">上下文使用量会在聊天时估算。</p>
+                <button id="inspectPromptButton" class="secondary-button wide" type="button">查看本次发送内容</button>
+            </section>
+
+            <section class="settings-view" data-settings-view="appearance">
+                <div class="section-title first">阅读主题</div>
+                <label class="field"><span>配色</span><select id="themeSelect">
+                    <option value="midnight">午夜青绿</option><option value="cyber">赛博霓虹</option><option value="amber">旧书琥珀</option><option value="forest">荒野森林</option><option value="rose">暗夜玫瑰</option><option value="daylight">清爽日间</option>
+                </select></label>
+                <div class="section-title">正文排版</div>
+                <label class="field"><span>聊天布局</span><select id="layoutSelect"><option value="document">沉浸文案</option><option value="bubbles">角色气泡</option></select></label>
+                <label class="field"><span>正文字体</span><select id="fontFamilySelect"><option value="system">系统黑体</option><option value="song">宋体书卷</option><option value="kai">楷体手写</option><option value="mono">等宽日志</option></select></label>
+                <label class="file-button wide font-import">导入本地字体<input id="fontFileInput" type="file" accept=".ttf,.otf,.woff,.woff2,font/ttf,font/otf,font/woff,font/woff2"></label>
+                <div class="font-import-status"><span id="customFontStatus" class="hint small">支持 TTF、OTF、WOFF、WOFF2，导入后保存在本机。</span><button id="clearCustomFontButton" class="text-button" type="button" hidden>移除</button></div>
+                <label class="field"><span>文字大小</span><select id="fontSizeSelect"><option value="15">小</option><option value="17">标准</option><option value="19">大</option><option value="21">特大</option></select></label>
+                <div class="section-title">行动交互</div>
+                <label class="field"><span>点击行动选项时</span><select id="choiceModeSelect"><option value="fill">填入输入框，可修改</option><option value="send">立即发送</option></select></label>
+                <p class="hint">外观只改变阅读体验，不会改变角色卡和世界观。</p>
+            </section>
+
+            <section class="settings-view" data-settings-view="data">
+                <div class="section-title first">本机数据</div>
+                <p class="remember-badge">✓ 自动牢记已开启</p>
+                <p class="hint">角色卡、世界书、故事记忆、主题、参数和聊天同时保存在 localStorage 与 IndexedDB。</p>
+                <button id="exportButton" class="secondary-button wide">导出当前聊天 TXT</button>
+                <button id="exportAllButton" class="secondary-button wide" type="button">导出完整数据备份 JSON</button>
+                <label class="file-button wide data-import">恢复完整数据备份<input id="backupFileInput" type="file" accept="application/json,.json"></label>
+                <p class="hint small">完整备份不包含 API 密钥。恢复前程序会保留当前数据，失败不会覆盖。</p>
+                <button id="clearButton" class="danger-button wide">清空本机数据和密钥</button>
+
+                <div class="section-title">版本</div>
+                <div class="version-card"><strong>v0.8.1-preview</strong><span>数据结构 v7</span></div>
+            </section>
+        </div>
+    </aside>
+
+    <dialog id="cardEditorDialog" class="editor-dialog">
+        <div class="dialog-head"><div><span class="eyebrow">CHARACTER CARD</span><h2 id="cardEditorTitle">新建角色卡</h2></div><button id="cancelCardEditorButton" class="icon-button" type="button" aria-label="关闭">×</button></div>
+        <div class="dialog-body">
+            <label class="field"><span>角色名称</span><input id="cardEditorName" maxlength="120" placeholder="例如：侦探林夏"></label>
+            <div class="avatar-editor-row">
+                <div id="cardAvatarPreview" class="avatar-preview">角</div>
+                <div><label class="file-button avatar-upload">从相册上传头像<input id="cardAvatarFileInput" type="file" accept="image/*"></label><button id="clearCardAvatarButton" class="secondary-button" type="button">使用自动头像</button><p class="hint small">PNG 角色卡会自动使用卡图；也可以上传自己的图片。</p></div>
+            </div>
+            <label class="field"><span>角色描述</span><textarea id="cardEditorDescription" rows="7" placeholder="身份、经历、外貌、能力、行为规则……"></textarea></label>
+            <label class="field"><span>性格</span><textarea id="cardEditorPersonality" rows="4"></textarea></label>
+            <label class="field"><span>场景</span><textarea id="cardEditorScenario" rows="5"></textarea></label>
+            <label class="field"><span>开场白</span><textarea id="cardEditorFirstMessage" rows="7"></textarea></label>
+            <details class="advanced-editor"><summary>高级角色卡字段</summary>
+                <label class="field"><span>示例对话</span><textarea id="cardEditorExample" rows="5"></textarea></label>
+                <label class="field"><span>角色专属系统提示</span><textarea id="cardEditorSystemPrompt" rows="5"></textarea></label>
+                <label class="field"><span>历史记录后指令</span><textarea id="cardEditorPostHistory" rows="4"></textarea></label>
+            </details>
+            <button id="saveCardButton" class="primary-button wide" type="button">保存为当前角色</button>
+        </div>
+    </dialog>
+
+    <dialog id="worldEditorDialog" class="editor-dialog">
+        <div class="dialog-head"><div><span class="eyebrow">WORLD BOOK</span><h2 id="worldEditorTitle">新建世界书</h2></div><button id="cancelWorldEditorButton" class="icon-button" type="button" aria-label="关闭">×</button></div>
+        <div class="dialog-body">
+            <label class="field"><span>世界书名称</span><input id="worldEditorName" maxlength="160"></label>
+            <div class="entry-toolbar"><strong>条目</strong><button id="addWorldEntryButton" class="secondary-button" type="button">＋ 添加条目</button></div>
+            <div id="worldEntriesEditor" class="world-entries-editor"></div>
+            <button id="saveWorldButton" class="primary-button wide" type="button">保存为当前世界书</button>
+        </div>
+    </dialog>
+
+    <dialog id="promptInspectorDialog" class="editor-dialog inspector-dialog">
+        <div class="dialog-head"><div><span class="eyebrow">CONTEXT VIEWER</span><h2>本次发送内容</h2></div><button id="closePromptInspectorButton" class="icon-button" type="button" aria-label="关闭">×</button></div>
+        <div class="dialog-body"><p class="hint">这里只显示提示词和故事上下文，不显示 API 密钥。</p><pre id="promptInspectorContent" class="prompt-inspector"></pre></div>
+    </dialog>
+
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script type="module" src="./app.js"></script>
+</body>
+</html>

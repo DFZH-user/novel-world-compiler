@@ -1,0 +1,56 @@
+import { expect, test, _electron as electron } from '@playwright/test';
+import fs from 'node:fs/promises';
+import path from 'node:path';
+
+test('compiler previews existing worldbook and opens its source workbench', async () => {
+  test.setTimeout(60000);
+  const sample=process.env.NOVEL_REDESIGN_SAMPLE;
+  test.skip(!sample, 'Requires offline audit fixture');
+  if(!sample!.includes('.codex-redesign-audit')) throw new Error('Use protected audit data');
+  const audit=path.dirname(sample!);
+  const book=JSON.parse(await fs.readFile(path.join(audit,'cross-book-fixture.json'),'utf8'));
+  const output=path.join(audit,`worldbook-preview-${Date.now()}`);
+  await fs.mkdir(output,{recursive:true});
+  const sourceRoot=book.rootPath;
+  const copyRoot=path.join(output,'input.novelworld');
+  await fs.cp(sourceRoot,copyRoot,{recursive:true,filter:source=>source!==path.join(sourceRoot,'exports')});
+  book.rootPath=copyRoot;
+  await fs.writeFile(path.join(output,'project-library.json'),JSON.stringify([book]));
+  const env:Record<string,string>={...Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string,string]=>typeof entry[1]==='string')),NOVEL_COMPILER_USER_DATA:output,NODE_ENV:'test'};
+  delete env.ELECTRON_RUN_AS_NODE;
+  const executablePath=process.env.NOVEL_PACKAGED_EXECUTABLE;
+  const app=await electron.launch({executablePath,args:executablePath?[]:[path.resolve('.')],env});
+  try {
+    const page=await app.firstWindow();
+    await page.getByRole('button',{name:'打开这本书'}).click();
+    await page.getByRole('button',{name:'进入编译工作台'}).click();
+    await page.getByRole('button',{name:'基础稿生成'}).click();
+    const exportPath=path.join(output,'standalone-worldbook.json');
+    await app.evaluate(({dialog}, filePath) => { dialog.showSaveDialog=async () => ({canceled:false,filePath}); },exportPath);
+    await page.getByRole('button',{name:'导出世界书 ↗',exact:true}).click();
+    await expect.poll(async () => fs.access(exportPath).then(()=>true,()=>false)).toBe(true);
+    const world=JSON.parse(await fs.readFile(exportPath,'utf8'));
+    expect(world.extensions.novel_world_compiler.project_id).toBe(book.id);
+    expect(Object.keys(world.entries)).toHaveLength(3);
+    expect(JSON.stringify(world)).not.toContain('青石镇主');
+    expect(world.token_budget).toBe(2048);
+    await page.getByRole('button',{name:'查看世界书',exact:true}).click();
+    const preview=page.getByRole('region',{name:'世界书内容预览'});
+    await expect(preview.locator('details').first()).toBeVisible();
+    await preview.getByLabel('搜索世界书内容').fill('青石镇');
+    await expect(preview.locator('details').first()).toBeVisible();
+    await preview.locator('summary').first().click();
+    await expect(preview).not.toContainText('青石镇主');
+    await page.screenshot({path:path.join(output,'preview.png'),fullPage:true});
+    await preview.getByRole('button',{name:'前往世界地图工作台'}).click();
+    await expect(page.getByRole('region',{name:'世界地点总览'})).toBeVisible();
+    await page.getByRole('button',{name:'基础稿生成'}).click();
+    await app.evaluate(({dialog}, directory) => { dialog.showOpenDialog=async () => ({canceled:false,filePaths:[directory]}); },output);
+    await page.getByRole('button',{name:'导出可游玩整合包',exact:true}).click();
+    const receipt=page.locator('.artifact-generation-receipt').filter({hasText:'可游玩整合包已生成'});
+    await expect(receipt).toBeVisible();
+    await receipt.getByRole('button',{name:'进入沉浸阅读',exact:true}).click();
+    await expect(page.getByRole('heading',{name:'你是谁，由你决定'})).toBeVisible();
+    console.log('Worldbook preview acceptance:',output);
+  } finally {await app.close();}
+});

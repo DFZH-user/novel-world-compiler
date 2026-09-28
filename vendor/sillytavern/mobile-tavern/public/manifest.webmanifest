@@ -1,0 +1,13 @@
+{
+    "name": "移动酒馆",
+    "short_name": "移动酒馆",
+    "description": "为 iPhone 设计的轻量 AI 角色扮演界面",
+    "start_url": "./",
+    "scope": "./",
+    "display": "standalone",
+    "background_color": "#071316",
+    "theme_color": "#071316",
+    "icons": [
+        { "src": "./icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any maskable" }
+    ]
+}
