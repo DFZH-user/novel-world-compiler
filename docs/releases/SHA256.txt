@@ -1,4 +1,4 @@
-fd764203d7327425b88d33b263ac6f3c41a725607d63fe0b3258d7851bce4e82  小说世界-便携版-0.3.0-integrated.15-x64.exe
-c1a2cc06aa8beffcd62c6696c0778b1a5c032a8245f04e7d639def9fe038aef6  小说世界-免安装解压版-0.3.0-integrated.15-x64.zip
-de2da3e7d610b2df89faf1535639137487bd226a83f67349359067e3cece275d  小说世界-安装版-0.3.0-integrated.15-x64.exe
-a83a201edd78bffda5c16fd6906ae38d7b457790ab7e5e821c248ffe2564be27  小说世界-安装版-0.3.0-integrated.15-x64.exe.blockmap
+fd764203d7327425b88d33b263ac6f3c41a725607d63fe0b3258d7851bce4e82  novel-world-portable-0.3.0-integrated.15-x64.exe
+de2da3e7d610b2df89faf1535639137487bd226a83f67349359067e3cece275d  novel-world-setup-0.3.0-integrated.15-x64.exe
+a83a201edd78bffda5c16fd6906ae38d7b457790ab7e5e821c248ffe2564be27  novel-world-setup-0.3.0-integrated.15-x64.exe.blockmap
+c1a2cc06aa8beffcd62c6696c0778b1a5c032a8245f04e7d639def9fe038aef6  novel-world-unpacked-0.3.0-integrated.15-x64.zip
