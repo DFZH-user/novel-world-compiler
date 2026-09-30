@@ -40,7 +40,29 @@ export function WorldLibrary({ status, onEnterCompiler, onEnterTavern, onEnterPl
     return () => { mounted = false; clearTimeout(timer.current); };
   }, []);
   function choose(id: string) { if (lock.current) return; setSelected(id); localStorage.setItem('nw-selected-book', id); }
-  function openChoice(id: string) { choose(id); setChoiceBookId(id); }
+  function unfoldBook(id: string, destination: 'compiler' | 'choice') {
+    setCreating(false); setList(false); setQuery(''); setPhase('');
+    const finish = () => {
+      setPhase('');
+      if (destination === 'choice') {
+        setChoiceBookId(id); lock.current = false; setBusy(false);
+      } else onEnterCompiler(id);
+    };
+    if (matchMedia('(prefers-reduced-motion: reduce)').matches) { finish(); return; }
+    // Mount the cover first, including when opening from the list or file picker.
+    timer.current = setTimeout(() => {
+      setPhase('gather');
+      timer.current = setTimeout(() => {
+        setPhase('unfold');
+        timer.current = setTimeout(finish, 750);
+      }, 650);
+    }, 32);
+  }
+  function openChoice(id: string) {
+    if (lock.current) return;
+    choose(id); lock.current = true; setBusy(true); setError('');
+    unfoldBook(id, 'choice');
+  }
   function step(direction: number) { if (filtered.length) choose(filtered[(index + direction + filtered.length) % filtered.length].id); }
   const stepRef = useRef(step); stepRef.current = step;
   useEffect(() => {
@@ -49,7 +71,7 @@ export function WorldLibrary({ status, onEnterCompiler, onEnterTavern, onEnterPl
     const wheel = (event: WheelEvent) => { event.preventDefault(); if (Date.now() - last > 300 && Math.abs(event.deltaY + event.deltaX) > 8) { last = Date.now(); stepRef.current(Math.sign(event.deltaY + event.deltaX)); } };
     node.addEventListener('wheel', wheel, { passive: false });
     return () => node.removeEventListener('wheel', wheel);
-  }, [loading, list, filtered.length]);
+  }, [loading, list, filtered.length, choiceBookId]);
   async function act(operation: () => Promise<ProjectSummary | null>, destination: 'compiler' | 'choice' = 'compiler') {
     if (lock.current) return;
     lock.current = true; setBusy(true); setError('');
@@ -58,14 +80,9 @@ export function WorldLibrary({ status, onEnterCompiler, onEnterTavern, onEnterPl
       if (!result) { lock.current = false; setBusy(false); return; }
       setSelected(result.id); localStorage.setItem('nw-selected-book', result.id);
       setBooks(current => current.some(b => b.id === result.id) ? current.map(b => b.id === result.id ? result : b) : [...current, result]);
-      if (destination === 'choice') {
-        setCreating(false); setList(false); setQuery(''); setChoiceBookId(result.id);
-        lock.current = false; setBusy(false);
-        return;
-      }
-      setCreating(false); setList(false); setQuery(''); setPhase('gather');
-      const reduced = matchMedia('(prefers-reduced-motion: reduce)').matches;
-      timer.current = setTimeout(() => { setPhase('unfold'); timer.current = setTimeout(() => onEnterCompiler(result.id), reduced ? 0 : 320); }, reduced ? 0 : 650);
+      if (destination === 'compiler' && choiceBookId) {
+        onEnterCompiler(result.id);
+      } else unfoldBook(result.id, destination);
     } catch (e) { setError(e instanceof Error ? e.message : String(e)); setPhase(''); lock.current = false; setBusy(false); }
   }
   if (choiceBook) return <main className="world-library library-choice" aria-busy={busy}>
