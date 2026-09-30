@@ -96,7 +96,8 @@
       "createStartMenuShortcut": true
     },
     "portable": {
-      "artifactName": "${productName}-便携版-${version}-${arch}.${ext}"
+      "artifactName": "${productName}-便携版-${version}-${arch}.${ext}",
+      "unpackDirName": true
     },
     "afterPack": "scripts/verify-integrated-resources.cjs"
   }
