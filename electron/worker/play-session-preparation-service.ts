@@ -19,6 +19,7 @@ import { RelationshipGraphExportService } from './relationship-graph-export-serv
 import { StoryStateService } from './story-state-service';
 import { SCHEMA_VERSION } from './schema';
 import { PlayableBundleValidationService } from './playable-bundle-validation-service';
+import { activeLocalPipeline } from './local-pipeline-context';
 
 function contained(root: string, target: string): boolean {
   const relative = path.relative(root, target);
@@ -84,8 +85,9 @@ export class PlaySessionPreparationService {
       WHERE i.revision_id = ? AND m.surface_text = i.canonical_name
         AND m.alignment_status IN ('exact', 'normalized') AND p.ordinal <= ?
     `).all(project.activeRevisionId, ordinal) as Array<{ id: string }>).map(row => row.id));
+    const local = activeLocalPipeline(this.store.get().db, project.activeRevisionId);
     const eligible = state.characters.filter(character =>
-      (character.importanceTier === 'core' || character.importanceTier === 'important')
+      (local ? local.identityIds.includes(character.identityId) : character.importanceTier === 'core' || character.importanceTier === 'important')
       && character.values.length > 0 && namedBeforeEntry.has(character.identityId));
     const characters = eligible.map(character => {
       const lines = character.values.slice(0, profile === 'high' ? 90 : 45).map(value =>
@@ -94,7 +96,7 @@ export class PlaySessionPreparationService {
         spec: 'chara_card_v2', spec_version: '2.0',
         data: {
           name: character.identityName,
-          description: `【当时已揭示资料】\n${lines.join('\n')}`,
+          description: `${local ? '【本地基础资料】以下为原文提及，并不表示该角色亲历或知道每项内容；不确定的知识、性格与秘密保持未知。\n' : ''}【当时已揭示资料】\n${lines.join('\n')}`,
           personality: '',
           scenario: `故事从“${state.entryEventTitle}”（原文段落 ${ordinal}）进入。`,
           first_mes: `*故事从“${state.entryEventTitle}”这一时刻展开。*`,

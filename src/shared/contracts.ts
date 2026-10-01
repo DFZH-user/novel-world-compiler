@@ -2381,7 +2381,11 @@ export type WorkerRequestMap = {
   'source-spans:inspect': { sourceSpanId: string };
   'jobs:list': undefined;
   'jobs:control': { jobId: string; action: 'pause' | 'resume' | 'cancel' | 'retry' };
-  'workflows:foundation-create': { model: string; profile: string; tokenBudget?: number | null };
+  'workflows:foundation-create': { model: string; profile: string; tokenBudget?: number | null; localOptions?: import('./local-foundation').LocalGenerationOptions };
+  'workflows:local-next': { runId: string };
+  'workflows:local-upgrade': { runId: string };
+  'workflows:local-result': { runId: string };
+  'workflows:local-export': import('./local-foundation').LocalFoundationExportOptions;
   'workflows:foundation-list': undefined;
   'workflows:foundation-get': { runId: string };
   'workflows:foundation-budget': { runId: string; tokenBudget: number | null };
@@ -2592,6 +2596,10 @@ export type WorkerResponseMap = {
   'jobs:list': JobRecord[];
   'jobs:control': JobRecord[];
   'workflows:foundation-create': FoundationWorkflowStart;
+  'workflows:local-next': FoundationWorkflowRunRecord;
+  'workflows:local-upgrade': FoundationWorkflowStart;
+  'workflows:local-result': import('./local-foundation').LocalFoundationResult;
+  'workflows:local-export': import('./local-foundation').LocalFoundationExportResult;
   'workflows:foundation-list': FoundationWorkflowRunRecord[];
   'workflows:foundation-get': FoundationWorkflowRunRecord;
   'workflows:foundation-budget': FoundationWorkflowRunRecord;
@@ -2803,7 +2811,10 @@ export type AppApi = {
   inspectSourceSpan(sourceSpanId: string): Promise<SourceSpanInspection>;
   listJobs(): Promise<JobRecord[]>;
   controlJob(jobId: string, action: 'pause' | 'resume' | 'cancel' | 'retry'): Promise<JobRecord[]>;
-  startFoundationWorkflow(options: { model: string; profile?: string; tokenBudget?: number | null }): Promise<FoundationWorkflowStart>;
+  startFoundationWorkflow(options: { model: string; profile?: string; tokenBudget?: number | null; localOptions?: import('./local-foundation').LocalGenerationOptions }): Promise<FoundationWorkflowStart>;
+  getLocalFoundationResult(runId: string): Promise<import('./local-foundation').LocalFoundationResult>;
+  upgradeLocalFoundation(runId: string): Promise<FoundationWorkflowStart>;
+  exportLocalFoundation(options: import('./local-foundation').LocalFoundationExportOptions): Promise<import('./local-foundation').LocalFoundationExportResult>;
   listFoundationWorkflows(): Promise<FoundationWorkflowRunRecord[]>;
   getFoundationUsage(runId: string): Promise<FoundationUsageSummary>;
   updateFoundationTokenBudget(runId: string, tokenBudget: number | null): Promise<FoundationWorkflowRunRecord>;

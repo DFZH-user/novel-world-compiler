@@ -49,7 +49,13 @@ export class FoundationWorkflowRunner {
     setImmediate(() => {
       void this.run(runId)
         .catch((error) => console.error('[foundation-workflow]', error))
-        .finally(() => this.activeRuns.delete(runId));
+        .finally(() => {
+          this.activeRuns.delete(runId);
+          // A quick pause/resume can arrive while the previous local loop is exiting.
+          void this.worker.request('workflows:foundation-get', { runId }).then(workflow => {
+            if (workflow.profile === 'local' && workflow.state === 'running') this.start(runId);
+          }).catch(() => undefined);
+        });
     });
   }
 
@@ -57,6 +63,14 @@ export class FoundationWorkflowRunner {
     try {
       let workflow = await this.worker.request('workflows:foundation-get', { runId });
       if (workflow.state !== 'running') return;
+
+      if (workflow.profile === 'local') {
+        while (workflow.state === 'running') {
+          workflow = await this.worker.request('workflows:local-next', { runId });
+          if (workflow.state === 'running') await delay(20);
+        }
+        return;
+      }
 
       if (!this.completed(workflow, 'preflight')) {
         await this.worker.request('workflows:foundation-step', {

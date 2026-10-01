@@ -22,6 +22,7 @@ import { SCHEMA_VERSION } from './schema';
 import { StoryStateService } from './story-state-service';
 import { withTransaction } from './db-utils';
 import { CHARACTER_KNOWLEDGE_POLICY, StoryKnowledgeProjection, type ProjectedQuote } from './story-knowledge-projection';
+import { activeLocalPipeline, LOCAL_PIPELINE_VERSION } from './local-pipeline-context';
 
 type IdentityRow = { id: string; name: string; importanceTier: string };
 type DraftRow = {
@@ -149,6 +150,7 @@ export class CharacterCardService {
     if (!identity) throw new Error('请先确认要制作角色卡的人物');
     const projected = this.projectSources(identityId, entryEventId);
     const { snapshot } = projected;
+    const localBasic = activeLocalPipeline(db, revisionId)?.identityIds.includes(identityId) ?? false;
     const character = snapshot.characters[0];
     if (!character || !projected.facts.length) throw new Error('该进入点还没有可用于角色卡的已确认公开事实');
     const descriptive = character.values.filter((item) => !['personality', 'motivation', 'speech'].includes(item.category));
@@ -157,7 +159,7 @@ export class CharacterCardService {
     const speechLines = projectedSpeechLines(projected.quotes);
     const location = character.values.find((item) => item.category === 'status' && /地点|位置|所在/u.test(item.predicate) && item.value);
     const fields: CharacterCardDraftFields = {
-      description: [`{{char}}是小说工程中的人物，姓名为${identity.name}。`, renderValues(descriptive)].filter(Boolean).join('\n\n'),
+      description: [localBasic ? '【极低档本地基础资料】下列原文提及仅是文本线索，不等于角色亲历、内心或已知秘密。未说明的设定保持未知，不把同场人物的经历和对白归给本角色。' : '', `{{char}}是小说工程中的人物，姓名为${identity.name}。`, renderValues(descriptive)].filter(Boolean).join('\n\n'),
       personality: [renderValues(behavioral), speechLines.length ? `【对白统计画像】\n${speechLines.join('\n')}` : ''].filter(Boolean).join('\n\n'),
       scenario: `{{user}}在“${snapshot.entryEventTitle}”对应的故事时间点进入世界。下列人物状态以这个进入点为准；标记为不确定的内容不可擅自选定。`,
       firstMes: `*故事从“${snapshot.entryEventTitle}”这一时刻展开。${location?.value ? `${identity.name}此时位于${location.value}。` : `${identity.name}正处在这个世界中。`}*`,
@@ -166,9 +168,9 @@ export class CharacterCardService {
       systemPrompt: '',
       postHistoryInstructions: '',
       alternateGreetings: [],
-      tags: ['小说角色', '证据驱动', identity.importanceTier === 'core' ? '核心人物' : identity.importanceTier === 'important' ? '重要人物' : '小说人物'],
+      tags: ['小说角色', '证据驱动', ...(localBasic ? ['本地基础'] : []), identity.importanceTier === 'core' ? '核心人物' : identity.importanceTier === 'important' ? '重要人物' : '小说人物'],
       creator: '小说世界编译器',
-      characterVersion: '1.0-draft',
+      characterVersion: localBasic ? LOCAL_PIPELINE_VERSION : '1.0-draft',
     };
     const sourceFingerprint = projected.fingerprint;
     const sourceSummary = {
@@ -354,13 +356,15 @@ export class CharacterCardService {
   batchStatus(): CharacterCardBatchItem[] {
     const { db, projectId } = this.store.get();
     const revisionId = activeRevision(db, projectId);
+    const local = activeLocalPipeline(db, revisionId);
     const rows = db.prepare(`SELECT i.id AS identityId, i.canonical_name AS identityName, i.importance_tier AS importanceTier,
       COUNT(CASE WHEN COALESCE(m.truth_status, 'asserted') = 'asserted' THEN f.id END) AS confirmedFactCount FROM person_identities i
       LEFT JOIN character_facts f ON f.identity_id = i.id AND f.review_status = 'confirmed'
       LEFT JOIN character_fact_claim_metadata m ON m.fact_id = f.id
-      WHERE i.revision_id = ? AND i.review_status = 'confirmed' AND i.importance_tier IN ('core','important')
+      WHERE i.revision_id = ? AND i.review_status = 'confirmed'
+        AND ${local ? 'i.id IN (SELECT value FROM json_each(?))' : "i.importance_tier IN ('core','important')"}
       GROUP BY i.id ORDER BY CASE i.importance_tier WHEN 'core' THEN 0 ELSE 1 END, i.canonical_name`)
-      .all(revisionId) as Array<{ identityId: string; identityName: string; importanceTier: 'core' | 'important'; confirmedFactCount: number }>;
+      .all(revisionId, ...(local ? [JSON.stringify(local.identityIds)] : [])) as Array<{ identityId: string; identityName: string; importanceTier: 'core' | 'important'; confirmedFactCount: number }>;
     return rows.map((row) => {
       const draft = this.getDraft(row.identityId);
       const quality = draft ? this.qualityReport(draft) : null;
@@ -446,7 +450,9 @@ export class CharacterCardService {
     if (approximateTokens > 5000) subtract(8, 'warning', 'large_context', `主要字段约 ${approximateTokens} Token，可能挤占聊天上下文`);
     score = Math.max(0, Math.min(100, score));
     const grade: CharacterCardQualityReport['grade'] = score >= 90 ? 'A' : score >= 75 ? 'B' : score >= 60 ? 'C' : 'D';
-    return { score, grade, contentReady: score >= 70 && !issues.some((issue) => issue.severity === 'error'), approximateCharacters, approximateTokens, issues };
+    const localBasic = draft.characterVersion === LOCAL_PIPELINE_VERSION && draft.tags.includes('本地基础');
+    if (localBasic) issues.push({ severity: 'info', code: 'local_basic_profile', message: '极低档按基础可玩门槛判断；缺少性格或对白示例会保留质量提示，不要求虚构内容补齐。' });
+    return { score, grade, contentReady: (localBasic || score >= 70) && !issues.some((issue) => issue.severity === 'error'), approximateCharacters, approximateTokens, issues };
   }
 
   private getRefinement(refinementId: string): CharacterCardRefinementRecord | null {

@@ -25,6 +25,7 @@ import { PlaceGeometryService } from './place-geometry-service';
 import { backfillSourceSpans, inspectSourceSpan } from './source-span-service';
 import { ProjectDiagnosticService } from './project-diagnostic-service';
 import { FoundationWorkflowService } from './foundation-workflow-service';
+import { LocalFoundationService } from './local-foundation-service';
 import { AutomationDraftSelectionService } from './automation-draft-selection-service';
 import { AutomationDraftQuoteService } from './automation-draft-quote-service';
 import { RefinementDashboardService } from './refinement-dashboard-service';
@@ -63,6 +64,7 @@ const places = new PlaceService(store);
 const placeModelScans = new PlaceModelScanService(store);
 const diagnostics = new ProjectDiagnosticService(store);
 const foundationWorkflows = new FoundationWorkflowService(store);
+const localFoundation = new LocalFoundationService(store);
 const draftSelections = new AutomationDraftSelectionService(store);
 const draftQuotes = new AutomationDraftQuoteService(store);
 const refinementDashboard = new RefinementDashboardService(store);
@@ -241,7 +243,15 @@ async function dispatch<C extends WorkerChannel>(channel: C, rawPayload: WorkerR
     }
     case 'workflows:foundation-create': {
       const value = payload as WorkerRequestMap['workflows:foundation-create'];
-      result = foundationWorkflows.create(value.model, value.profile, value.tokenBudget);
+      result = foundationWorkflows.create(value.model, value.profile, value.tokenBudget, value.localOptions);
+      break;
+    }
+    case 'workflows:local-next': result = await localFoundation.next((payload as WorkerRequestMap['workflows:local-next']).runId); break;
+    case 'workflows:local-upgrade': result = localFoundation.upgrade((payload as WorkerRequestMap['workflows:local-upgrade']).runId); break;
+    case 'workflows:local-result': result = localFoundation.result((payload as WorkerRequestMap['workflows:local-result']).runId); break;
+    case 'workflows:local-export': {
+      const value = payload as WorkerRequestMap['workflows:local-export'];
+      result = await localFoundation.export(value.runId, value.entryOrdinal);
       break;
     }
     case 'workflows:foundation-list': result = foundationWorkflows.list(); break;

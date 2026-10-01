@@ -335,11 +335,23 @@ function registerIpc(): void {
   ipcMain.handle('workflows:foundation-usage', (_event, runId: string) => readTokenUsageSummary(String(runId)));
   ipcMain.handle('workflows:foundation-budget', (_event, runId: string, tokenBudget: number | null) =>
     worker.request('workflows:foundation-budget', { runId: String(runId), tokenBudget }));
-  ipcMain.handle('workflows:foundation-start', async (_event, options: { model?: unknown; profile?: unknown; tokenBudget?: unknown }) => {
+  ipcMain.handle('workflows:local-result', (_event, runId: string) => worker.request('workflows:local-result', { runId: String(runId) }));
+  ipcMain.handle('workflows:local-upgrade', async (_event, runId: string) => {
+    const result = await worker.request('workflows:local-upgrade', { runId: String(runId) });
+    if (result.state === 'running') foundationWorkflowRunner.start(result.runId);
+    return result;
+  });
+  ipcMain.handle('workflows:local-export', async (_event, options: import('../../src/shared/local-foundation').LocalFoundationExportOptions) => {
+    const result = await worker.request('workflows:local-export', { runId: String(options.runId), entryOrdinal: options.entryOrdinal });
+    await shell.openPath(result.outputPath);
+    return result;
+  });
+  ipcMain.handle('workflows:foundation-start', async (_event, options: { model?: unknown; profile?: unknown; tokenBudget?: unknown; localOptions?: import('../../src/shared/local-foundation').LocalGenerationOptions }) => {
     const start = await worker.request('workflows:foundation-create', {
       model: String(options?.model ?? '').trim(),
       profile: String(options?.profile ?? 'medium').trim() || 'medium',
       tokenBudget: options?.tokenBudget == null ? null : Number(options.tokenBudget),
+      localOptions: options?.localOptions,
     });
     if (start.state === 'running') foundationWorkflowRunner.start(start.runId);
     return start;

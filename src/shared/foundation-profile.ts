@@ -1,4 +1,4 @@
-export const foundationProfiles = ['low', 'medium', 'high'] as const;
+export const foundationProfiles = ['local', 'low', 'medium', 'high'] as const;
 export type FoundationProfile = typeof foundationProfiles[number];
 
 export function normalizeFoundationProfile(value: string): FoundationProfile | 'foundation-v1' {

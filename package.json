@@ -17,7 +17,8 @@
     "test:e2e": "playwright test",
     "test:sillytavern-roundtrip": "cross-env RUN_SILLYTAVERN_CARD_ROUNDTRIP=1 playwright test sillytavern-card-roundtrip.spec.ts",
     "benchmark:graph": "node scripts/benchmark-relationship-graph.mjs",
-    "dist:win": "npm run build && electron-builder --win nsis portable"
+    "dist:win": "npm run build && electron-builder --win nsis portable",
+    "dist:win:zip": "npm run build && electron-builder --win zip --x64 --config.electronDist=node_modules/electron/dist --config.directories.output=release/local-script-v3"
   },
   "dependencies": {
     "archiver": "7.0.1",
@@ -26,6 +27,7 @@
     "iconv-lite": "0.7.3",
     "react": "19.2.8",
     "react-dom": "19.2.8",
+    "segmentit": "^2.0.3",
     "unzipper": "0.12.5",
     "zod": "4.4.3"
   },
@@ -57,7 +59,8 @@
     "files": [
       "dist/**",
       "dist-electron/**",
-      "package.json"
+      "package.json",
+      "third-party-licenses/**"
     ],
     "extraResources": [
       {

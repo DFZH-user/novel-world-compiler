@@ -1,5 +1,5 @@
 export const BASE_SCHEMA_VERSION = 13;
-export const SCHEMA_VERSION = 28;
+export const SCHEMA_VERSION = 29;
 
 export const schemaSql = `
 PRAGMA foreign_keys = ON;
@@ -1719,6 +1719,41 @@ ALTER TABLE character_runtime_turns
   ADD COLUMN retrieval_json TEXT;
 ALTER TABLE character_runtime_turns
   ADD COLUMN retrieval_approx_tokens INTEGER NOT NULL DEFAULT 0;
+`,
+  },
+  {
+    version: 29,
+    sql: `
+CREATE TABLE local_foundation_runs (
+  run_id TEXT PRIMARY KEY REFERENCES foundation_workflow_runs(id) ON DELETE CASCADE,
+  phase TEXT NOT NULL DEFAULT 'discover',
+  cursor INTEGER NOT NULL DEFAULT -1,
+  total INTEGER NOT NULL,
+  max_cards INTEGER NOT NULL DEFAULT 20,
+  output_path TEXT
+);
+CREATE TABLE local_foundation_entities (
+  run_id TEXT NOT NULL REFERENCES local_foundation_runs(run_id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  kind TEXT NOT NULL CHECK(kind IN ('person','place','term')),
+  sightings INTEGER NOT NULL DEFAULT 0,
+  first_ordinal INTEGER NOT NULL,
+  seeded INTEGER NOT NULL DEFAULT 0,
+  selected INTEGER NOT NULL DEFAULT 0,
+  PRIMARY KEY(run_id, name)
+);
+CREATE TABLE local_foundation_evidence (
+  run_id TEXT NOT NULL REFERENCES local_foundation_runs(run_id) ON DELETE CASCADE,
+  name TEXT NOT NULL,
+  paragraph_id TEXT NOT NULL REFERENCES paragraphs(id) ON DELETE CASCADE,
+  ordinal INTEGER NOT NULL,
+  start_offset INTEGER NOT NULL,
+  end_offset INTEGER NOT NULL,
+  score INTEGER NOT NULL,
+  PRIMARY KEY(run_id, name, paragraph_id)
+);
+CREATE INDEX idx_local_evidence_entry ON local_foundation_evidence(run_id, name, ordinal);
+CREATE INDEX idx_local_evidence_paragraph ON local_foundation_evidence(run_id, paragraph_id, name);
 `,
   },
 ];

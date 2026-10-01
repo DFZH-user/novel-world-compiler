@@ -1,4 +1,6 @@
 import { WorldBookPreview } from './WorldBookPreview';
+import { LocalFoundationResults } from './LocalFoundationResults';
+import type { FoundationProfile } from './shared/foundation-profile';
 import { ApiRequestFields } from './ApiRequestFields';
 import { apiRequestSettingsSchema, defaultApiRequestSettings } from './shared/api-request-settings';
 import { lazy, Suspense, useCallback, useEffect, useMemo, useState, type FormEvent } from 'react';
@@ -216,7 +218,7 @@ function TavernSurface({ status, onBack, onRetry, onStop }: { status: SillyTaver
 
 function CompilerApp({ onBack, onRead }: { onBack: () => void; onRead: (id: string) => void }) {
   const [project, setProject] = useState<ProjectSummary | null>(null);
-  const [foundationProfile, setFoundationProfile] = useState<'low' | 'medium' | 'high'>('medium');
+  const [foundationProfile, setFoundationProfile] = useState<FoundationProfile>('medium');
   const [view, setView] = useState<View>(() => new URLSearchParams(window.location.search).get('view') === 'settings' ? 'settings' : 'overview');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
@@ -444,7 +446,7 @@ function PageTitle({ eyebrow, title, description }: { eyebrow: string; title: st
 
 function Overview({ project, chapters, chunks, jobs, onImport, onOpenWorkflow, onOpenRefinement, profile, onProfileChange }: {
   project: ProjectSummary; chapters: ChapterRecord[]; chunks: ChunkRecord[]; jobs: JobRecord[]; onImport: () => void; onOpenWorkflow: () => void; onOpenRefinement: () => void;
-  profile: 'low' | 'medium' | 'high'; onProfileChange: (profile: 'low' | 'medium' | 'high') => void;
+  profile: FoundationProfile; onProfileChange: (profile: FoundationProfile) => void;
 }) {
   const characters = chapters.reduce((sum, chapter) => sum + chapter.characterCount, 0);
   const latest = jobs[0];
@@ -472,7 +474,7 @@ function Overview({ project, chapters, chunks, jobs, onImport, onOpenWorkflow, o
           </div>
           <div className="panel foundation-launch">
             <div><span>AUTO FOUNDATION / BATCH 4</span><h3>让程序先跑出一个可审核的基础版本</h3><p>十一阶段已贯通人物、事实、对白、时间、事件、地点与关系草稿；所有结论仍保留人工闸门。</p></div>
-             <div className="foundation-launch-actions"><button className="button ghost" onClick={onOpenRefinement}>打开统一精修</button><label>整书分析档位<select aria-label="整书分析档位" value={profile} onChange={event => onProfileChange(event.target.value as 'low' | 'medium' | 'high')}><option value="low">低 · 快速草稿</option><option value="medium">中 · 均衡生成</option><option value="high">高 · 深度生成</option></select></label><button className="button primary" onClick={onOpenWorkflow}>打开一键生成</button></div>
+             <div className="foundation-launch-actions"><button className="button ghost" onClick={onOpenRefinement}>打开统一精修</button><label>整书分析档位<select aria-label="整书分析档位" value={profile} onChange={event => onProfileChange(event.target.value as FoundationProfile)}><option value="local">极低 · 本地脚本（零 API）</option><option value="low">低 · 快速草稿</option><option value="medium">中 · 均衡生成</option><option value="high">高 · 深度生成</option></select></label><button className="button primary" onClick={onOpenWorkflow}>打开一键生成</button></div>
           </div>
           <div className="next-grid">
             <article><span>01</span><h3>检查章节边界</h3><p>快速浏览自动识别结果，必要时拆分或合并。</p></article>
@@ -676,12 +678,14 @@ const foundationStateLabels: Record<FoundationWorkflowRunRecord['state'], string
   cancelled: '已取消',
 };
 
-function FoundationWorkflowView({ run, profile, onProfileChange }: { run: RunHelper; profile: 'low' | 'medium' | 'high'; onProfileChange: (profile: 'low' | 'medium' | 'high') => void }) {
+function FoundationWorkflowView({ run, profile, onProfileChange }: { run: RunHelper; profile: FoundationProfile; onProfileChange: (profile: FoundationProfile) => void }) {
   const [workflows, setWorkflows] = useState<FoundationWorkflowRunRecord[]>([]);
   const [usage, setUsage] = useState<FoundationUsageSummary | null>(null);
   const [model, setModel] = useState('');
   const [tokenBudgetInput, setTokenBudgetInput] = useState('');
   const [apiConfigured, setApiConfigured] = useState(false);
+  const [localNames, setLocalNames] = useState('');
+  const [maxCards, setMaxCards] = useState(20);
 
   const load = useCallback(async () => {
     const [status, records] = await Promise.all([
@@ -708,7 +712,8 @@ function FoundationWorkflowView({ run, profile, onProfileChange }: { run: RunHel
   async function start() {
     const value = await run(
       () => window.novelCompiler.startFoundationWorkflow({ model: model.trim(), profile,
-        tokenBudget: tokenBudgetInput.trim() ? Number(tokenBudgetInput) : null }),
+        tokenBudget: profile === 'local' ? null : tokenBudgetInput.trim() ? Number(tokenBudgetInput) : null,
+        localOptions: profile === 'local' ? { names: localNames, maxCards } : undefined }),
       '一键基础流程已经启动',
     );
     if (value) await load();
@@ -731,7 +736,7 @@ function FoundationWorkflowView({ run, profile, onProfileChange }: { run: RunHel
   }
 
   return <section className="foundation-workflow-view">
-    <PageTitle eyebrow="ONE-CLICK WORLD BUILD" title="一键生成完整世界" description="从原文自动完成人物、事实、对白、时间、事件、地点与关系定稿，并立即生成地图、关系图和角色卡；之后仍可逐项修改。" />
+    <PageTitle eyebrow="ONE-CLICK WORLD BUILD" title="一键生成完整世界" description={profile === 'local' ? '极低档在本地完成人物、事实、对白、时间、场景、地点与关系处理，生成基础角色卡、世界书和可游玩包；不需要 API，可继续精修。' : '从原文自动完成人物、事实、对白、时间、事件、地点与关系定稿，并立即生成地图、关系图和角色卡；之后仍可逐项修改。'} />
     <div className="foundation-workflow-console panel">
       <header>
         <div><span>BATCH 4 / WORLD DRAFTS</span><h3>{latest ? foundationStateLabels[latest.state] : '尚未运行'}</h3><p>{latest?.message ?? '选择模型后，点一次即可完成预检、分块、人物普查、草稿选择，以及人物事实、对白、时间、事件、地点、关系草稿与汇总。'}</p></div>
@@ -739,43 +744,59 @@ function FoundationWorkflowView({ run, profile, onProfileChange }: { run: RunHel
       </header>
       <div className="foundation-progress"><i style={{ width: `${Math.round((latest?.progress ?? 0) * 100)}%` }} /></div>
       <div className="foundation-controls">
-        <label><span>人物普查模型 ID（区分大小写）</span><input value={model} onChange={(event) => setModel(event.target.value)} placeholder="读取 API 设置中的首选模型" /></label>
-         <label><span>整书分析档位</span><select value={profile} onChange={(event) => onProfileChange(event.target.value as 'low' | 'medium' | 'high')}>
-          <option value="low">低 · 快速草稿</option><option value="medium">中 · 均衡生成</option><option value="high">高 · 深度生成</option>
+        {profile !== 'local' && <label><span>人物普查模型 ID（区分大小写）</span><input value={model} onChange={(event) => setModel(event.target.value)} placeholder="读取 API 设置中的首选模型" /></label>}
+         <label><span>整书分析档位</span><select value={profile} onChange={(event) => onProfileChange(event.target.value as FoundationProfile)}>
+          <option value="local">极低 · 本地脚本（零 API）</option><option value="low">低 · 快速草稿</option><option value="medium">中 · 均衡生成</option><option value="high">高 · 深度生成</option>
         </select></label>
-         <label><span>本次 Token 上限（可选）</span><input type="number" min={1000} max={1000000000} step={1000} value={tokenBudgetInput} onChange={event => setTokenBudgetInput(event.target.value)} placeholder="留空表示不限" /></label>
+         {profile !== 'local' && <label><span>本次 Token 上限（可选）</span><input type="number" min={1000} max={1000000000} step={1000} value={tokenBudgetInput} onChange={event => setTokenBudgetInput(event.target.value)} placeholder="留空表示不限" /></label>}
+         {profile === 'local' && <><label><span>补充人名（可选，用逗号分隔）</span><input value={localNames} onChange={e => setLocalNames(e.target.value)} placeholder="例如：鲁迪乌斯，洛琪希" /></label><label><span>最多生成角色卡</span><input type="number" min={1} max={100} value={maxCards} onChange={e => setMaxCards(Number(e.target.value))} /></label></>}
         {!latest || ['completed', 'cancelled'].includes(latest.state)
-          ? <button className="button primary" disabled={!apiConfigured || !model.trim()} onClick={() => void start()}>一键开始</button>
+          ? <button className="button primary" disabled={profile !== 'local' && (!apiConfigured || !model.trim())} onClick={() => void start()}>一键开始</button>
           : <>
             {latest.state === 'running' && <button className="button ghost" onClick={() => void control('pause')}>暂停</button>}
              {['paused', 'queued'].includes(latest.state) && (budgetReached
                ? <button className="button primary" onClick={() => void updateBudgetAndResume()}>更新上限并继续</button>
                : <button className="button primary" onClick={() => void control('resume')}>继续</button>)}
             {latest.state === 'failed' && <button className="button primary" onClick={() => void control('retry')}>从失败处重试</button>}
+            {latest.state === 'failed' && latest.profile === 'local' && <button className="button ghost" onClick={() => void start()}>按当前设置重新生成</button>}
             {['running', 'paused', 'queued'].includes(latest.state) && <button className="button ghost danger" onClick={() => void control('cancel')}>取消本次</button>}
           </>}
       </div>
-      <p>低档：全书人物和事件扫描，人物事实按全书均匀抽取最多 800 个直接提及段落，不带邻段；可能漏掉细节。中档：全书扫描，人物事实仅为短段补邻段。高档：保留完整邻段，并增加第二轮事实补漏。三档结果都需检查证据，Token 实际用量以模型响应为准。</p>
-      {latest && <small>本次已报告用量：输入 {usage?.inputTokens.toLocaleString() ?? '—'}、输出 {usage?.outputTokens.toLocaleString() ?? '—'} Token；HTTP 请求 {usage?.attempts ?? '—'} 次，本地结果复用 {usage?.localCacheHits ?? '—'} 次，其中异常／重试 {usage?.failedAttempts ?? '—'} 次、未报告用量 {usage?.unreportedAttempts ?? '—'} 次。{usage && usage.cacheHitTokens + usage.cacheMissTokens > 0 ? `网关报告的前缀缓存命中 ${usage.cacheHitTokens.toLocaleString()}、未命中 ${usage.cacheMissTokens.toLocaleString()} Token；具体折扣以网关账单为准。` : '网关前缀缓存用量未确认。'}{latest.tokenBudget ? `本次上限 ${latest.tokenBudget.toLocaleString()} Token，接近时自动暂停；在途请求可能略超。` : '本次未设置 Token 上限。'}</small>}
+      {profile !== 'local' && <p>低档：全书人物和事件扫描，人物事实按全书均匀抽取最多 800 个直接提及段落，不带邻段；可能漏掉细节。中档：全书扫描，人物事实仅为短段补邻段。高档：保留完整邻段，并增加第二轮事实补漏。三档结果都需检查证据，Token 实际用量以模型响应为准。</p>}
+      {latest && latest.profile !== 'local' && <small>本次已报告用量：输入 {usage?.inputTokens.toLocaleString() ?? '—'}、输出 {usage?.outputTokens.toLocaleString() ?? '—'} Token；HTTP 请求 {usage?.attempts ?? '—'} 次，本地结果复用 {usage?.localCacheHits ?? '—'} 次，其中异常／重试 {usage?.failedAttempts ?? '—'} 次、未报告用量 {usage?.unreportedAttempts ?? '—'} 次。{usage && usage.cacheHitTokens + usage.cacheMissTokens > 0 ? `网关报告的前缀缓存命中 ${usage.cacheHitTokens.toLocaleString()}、未命中 ${usage.cacheMissTokens.toLocaleString()} Token；具体折扣以网关账单为准。` : '网关前缀缓存用量未确认。'}{latest.tokenBudget ? `本次上限 ${latest.tokenBudget.toLocaleString()} Token，接近时自动暂停；在途请求可能略超。` : '本次未设置 Token 上限。'}</small>}
       {usage && Object.keys(usage.stages).length > 0 && <details className="foundation-usage-stages">
         <summary>按阶段查看 Token 用量</summary>
         {Object.entries(usage.stages).map(([stage, item]) => <p key={stage}>
           <strong>{foundationStepLabels[stage as FoundationWorkflowStepKey]?.title ?? stage}</strong>：输入 {item.inputTokens.toLocaleString()}、输出 {item.outputTokens.toLocaleString()} Token；请求 {item.attempts} 次，结果复用 {item.localCacheHits} 次，异常／重试 {item.failedAttempts} 次，未报告用量 {item.unreportedAttempts} 次{item.cacheHitTokens + item.cacheMissTokens > 0 ? `；网关前缀缓存命中 ${item.cacheHitTokens.toLocaleString()}／未命中 ${item.cacheMissTokens.toLocaleString()} Token` : ''}
         </p>)}
       </details>}
-      {latest && <small>当前流程档位：{(latest.profile === 'low' ? '低' : latest.profile === 'medium' ? '中' : latest.profile === 'high' ? '高' : latest.profile === 'foundation-v1' ? '旧版' : latest.profile)}</small>}
-      {!apiConfigured && <div className="foundation-warning">还没有可用的 API 设置。请先到左侧“API 设置”保存并测试连接。</div>}
+      {latest && <small>当前流程档位：{(latest.profile === 'local' ? '极低 · 本地脚本' : latest.profile === 'low' ? '低' : latest.profile === 'medium' ? '中' : latest.profile === 'high' ? '高' : latest.profile === 'foundation-v1' ? '旧版' : latest.profile)}</small>}
+      {profile === 'local' && <p>极低档：本地分词、关键句和规则提取，走完人物、事实整理、对白、时间、章节场景、地点、关系图及角色卡／世界书生成，输出可游玩包。不需 API 设置，失败时不会转用模型。复杂性格、绝对故事日期和地理坐标不确定时保留未知。</p>}
+      {!apiConfigured && profile !== 'local' && <div className="foundation-warning">还没有可用的 API 设置。请先到左侧“API 设置”保存并测试连接。</div>}
     </div>
     <div className="foundation-boundary">
-      <b>自动定稿</b><span>证据与置信度裁决</span><i>→</i><span>成品可用，后续可改</span>
-      <p>系统只自动处理尚未裁决的记录：高置信结论确认，低置信或冲突结论排除，来源和置信度全部保留。你之后的确认、排除、编辑和角色卡修改不会在重跑时被覆盖。</p>
+      <b>{(latest?.profile ?? profile) === 'local' ? '本地草稿' : '自动定稿'}</b><span>原文来源保留</span><i>→</i><span>查看与导出</span>
+      <p>{(latest?.profile ?? profile) === 'local' ? '极低档将有原文支持的基础资料接入工程，并按基础可玩标准生成成品。原文摘录不等于角色知情；同段共现不等于亲属或敌友关系。已有人工排除和已编辑角色卡保留。' : '系统只自动处理尚未裁决的记录：高置信结论确认，低置信或冲突结论排除，来源和置信度全部保留。你之后的确认、排除、编辑和角色卡修改不会在重跑时被覆盖。'}</p>
     </div>
     <div className="foundation-step-list">
       {(latest?.steps ?? (Object.keys(foundationStepLabels) as FoundationWorkflowStepKey[]).map((stepKey, ordinal) => ({
         stepKey, ordinal, state: 'pending' as const, progress: 0, message: '等待开始', childJobId: null, outputJson: null,
         error: null, startedAt: null, finishedAt: null, updatedAt: '',
       }))).map((step) => {
-        const copy = foundationStepLabels[step.stepKey];
+        const baseCopy = foundationStepLabels[step.stepKey];
+        const localCopy: Partial<Record<FoundationWorkflowStepKey, { title: string; note: string }>> = {
+          chunks: { title: '工程分块与本地分批读取', note: '建立正式工程分块，按段落批次处理并保留断点。' },
+          character_scan: { title: '本地识别人名与术语', note: '中文分词结合说话、动作和地点命名模式发现候选；可手动补充人名。' },
+          draft_selection: { title: '选择角色卡候选', note: '补充人名优先，再按重复提及次数选择，不确认人物事实。' },
+          character_facts: { title: '原文事实与整理', note: '同时匹配多个人名，选取代表原文并整理基础事实，不推断隐含设定。' },
+          dialogue_scan: { title: '对白检测与归属', note: '明确说话提示按规则归属，模糊对白保留待审核。' },
+          time_expressions: { title: '时间表达检测', note: '本地检测日期、相对时间等线索；绝对故事时间不确定时保留未知。' },
+          event_drafts: { title: '章节场景与故事入口', note: '分布取样与代表原文排序，生成带出处的场景和进入位置。' },
+          place_drafts: { title: '地点与术语原文条目', note: '只保留文本证据，不计算地理坐标。' },
+          relationship_drafts: { title: '人物关系与关系网', note: '同段提及明确标为原文共现，不推断朋友、亲属或敌人。' },
+          summary: { title: '角色卡、世界书与可游玩包', note: '接入成品制作与阅读入口，同时保留独立素材导出。' },
+        };
+        const copy = (latest?.profile ?? profile) === 'local' ? { ...baseCopy, ...localCopy[step.stepKey] } : baseCopy;
         const selectionOutput = step.stepKey === 'draft_selection' ? parseFoundationSelectionOutput(step.outputJson) : null;
         return <article className={`panel foundation-step ${step.state}`} key={step.stepKey}>
           <span>{copy.index}</span>
@@ -784,10 +805,11 @@ function FoundationWorkflowView({ run, profile, onProfileChange }: { run: RunHel
               {selectionOutput.selectedCharacters?.map((item) => <p key={item.identityId}><strong>{item.identityName}</strong>：{item.reason}</p>)}
             </details>}
           </div>
-          <strong>{step.state === 'completed' || step.state === 'skipped' ? '完成' : step.state === 'running' ? `${Math.round(step.progress * 100)}%` : step.state === 'failed' ? '失败' : step.state === 'paused' ? '暂停' : '等待'}</strong>
+          <strong>{step.state === 'skipped' ? '无需执行' : step.state === 'completed' ? '完成' : step.state === 'running' ? `${Math.round(step.progress * 100)}%` : step.state === 'failed' ? '失败' : step.state === 'paused' ? '暂停' : '等待'}</strong>
         </article>;
       })}
     </div>
+    {workflows.find(item => item.profile === 'local' && item.state === 'completed') && <LocalFoundationResults runId={workflows.find(item => item.profile === 'local' && item.state === 'completed')!.id} onUpgraded={load} />}
     {workflows.length > 1 && <details className="foundation-history panel">
       <summary>查看最近运行记录（{workflows.length}）</summary>
       {workflows.slice(1, 6).map((item) => <div key={item.id}><span>{new Date(item.updatedAt).toLocaleString()}</span><strong>{foundationStateLabels[item.state]}</strong><small>{item.message}</small></div>)}

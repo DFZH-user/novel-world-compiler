@@ -37,11 +37,11 @@ function hash(value: string): string {
 export class FoundationWorkflowService {
   constructor(private readonly store: ProjectStore) {}
 
-  create(modelInput: string, profileInput = 'foundation-v1', tokenBudgetInput?: number | null): FoundationWorkflowStart {
+  create(modelInput: string, profileInput = 'foundation-v1', tokenBudgetInput?: number | null, localOptions?: import('../../src/shared/local-foundation').LocalGenerationOptions): FoundationWorkflowStart {
     const { db, projectId } = this.store.get();
-    const model = modelInput.trim();
     const profile = normalizeFoundationProfile(profileInput.trim() || 'medium');
-    const tokenBudget = tokenBudgetInput == null ? null : Number(tokenBudgetInput);
+    const model = profile === 'local' ? 'local-pipeline.v2' : modelInput.trim();
+    const tokenBudget = profile === 'local' || tokenBudgetInput == null ? null : Number(tokenBudgetInput);
     if (tokenBudget !== null && (!Number.isSafeInteger(tokenBudget) || tokenBudget < 1000 || tokenBudget > 1_000_000_000)) {
       throw new Error('Token 上限须为 1000 至 10 亿之间的整数');
     }
@@ -65,6 +65,7 @@ export class FoundationWorkflowService {
       revisionId: revision.revisionId,
       profile,
       model,
+      localOptions: profile === 'local' ? localOptions : undefined,
       chunkPlanId: plan?.id ?? null,
       chunkInputHash: plan?.inputHash ?? null,
     }));
@@ -79,7 +80,7 @@ export class FoundationWorkflowService {
         .run(
           jobId,
           projectId,
-           JSON.stringify({ runId, revisionId: revision.revisionId, profile, model, tokenBudget }),
+           JSON.stringify({ runId, revisionId: revision.revisionId, profile, model, tokenBudget, localOptions: profile === 'local' ? localOptions : undefined }),
           inputHash,
           JSON.stringify({ runId, stepKey: null }),
           new Date(Date.now() + 60_000).toISOString(),
