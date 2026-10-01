@@ -21,6 +21,7 @@ import type {
   JobRecord,
   FoundationWorkflowControlAction,
   FoundationWorkflowRunRecord,
+  FoundationUsageSummary,
   FoundationWorkflowStepKey,
   ParagraphRecord,
   ProjectSummary,
@@ -215,6 +216,7 @@ function TavernSurface({ status, onBack, onRetry, onStop }: { status: SillyTaver
 
 function CompilerApp({ onBack, onRead }: { onBack: () => void; onRead: (id: string) => void }) {
   const [project, setProject] = useState<ProjectSummary | null>(null);
+  const [foundationProfile, setFoundationProfile] = useState<'low' | 'medium' | 'high'>('medium');
   const [view, setView] = useState<View>(() => new URLSearchParams(window.location.search).get('view') === 'settings' ? 'settings' : 'overview');
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<{ tone: 'ok' | 'error'; text: string } | null>(null);
@@ -258,6 +260,7 @@ function CompilerApp({ onBack, onRead }: { onBack: () => void; onRead: (id: stri
   }, []);
 
   useEffect(() => { void refresh().catch(() => undefined); }, [refresh]);
+  useEffect(() => { setFoundationProfile('medium'); }, [project?.id]);
   useEffect(() => {
     if (!project) return;
     const timer = window.setInterval(() => {
@@ -374,10 +377,10 @@ function CompilerApp({ onBack, onRead }: { onBack: () => void; onRead: (id: stri
         </aside>
         <main className="content">
           {notice && <div className={`notice ${notice.tone}`}>{notice.text}<button onClick={() => setNotice(null)}>×</button></div>}
-          {view === 'overview' && <Overview project={project} chapters={chapters} chunks={chunks} jobs={jobs} onImport={chooseImport} onOpenWorkflow={() => setView('foundation-workflow')} onOpenRefinement={() => setView('refinement')} />}
+           {view === 'overview' && <Overview project={project} chapters={chapters} chunks={chunks} jobs={jobs} onImport={chooseImport} onOpenWorkflow={() => setView('foundation-workflow')} onOpenRefinement={() => setView('refinement')} profile={foundationProfile} onProfileChange={setFoundationProfile} />}
           {view === 'chapters' && <ChaptersView chapters={chapters} onChanged={(value) => setChapters(value)} run={run} />}
           {view === 'chunks' && <ChunksView chunks={chunks} onChanged={setChunks} run={run} />}
-          {view === 'foundation-workflow' && <FoundationWorkflowView run={run} />}
+           {view === 'foundation-workflow' && <FoundationWorkflowView run={run} profile={foundationProfile} onProfileChange={setFoundationProfile} />}
           {view === 'refinement' && <RefinementWorkbench run={run} onNavigate={setView} />}
           {view === 'artifact-foundation' && <ArtifactFoundationWorkbench run={run} onNavigate={setView} onRead={() => onRead(project.id)} />}
           {view === 'characters' && <CharactersView chunks={chunks} jobs={jobs} run={run} />}
@@ -439,8 +442,9 @@ function PageTitle({ eyebrow, title, description }: { eyebrow: string; title: st
   return <div className="page-title"><p>{eyebrow}</p><h2>{title}</h2><span>{description}</span></div>;
 }
 
-function Overview({ project, chapters, chunks, jobs, onImport, onOpenWorkflow, onOpenRefinement }: {
+function Overview({ project, chapters, chunks, jobs, onImport, onOpenWorkflow, onOpenRefinement, profile, onProfileChange }: {
   project: ProjectSummary; chapters: ChapterRecord[]; chunks: ChunkRecord[]; jobs: JobRecord[]; onImport: () => void; onOpenWorkflow: () => void; onOpenRefinement: () => void;
+  profile: 'low' | 'medium' | 'high'; onProfileChange: (profile: 'low' | 'medium' | 'high') => void;
 }) {
   const characters = chapters.reduce((sum, chapter) => sum + chapter.characterCount, 0);
   const latest = jobs[0];
@@ -468,7 +472,7 @@ function Overview({ project, chapters, chunks, jobs, onImport, onOpenWorkflow, o
           </div>
           <div className="panel foundation-launch">
             <div><span>AUTO FOUNDATION / BATCH 4</span><h3>让程序先跑出一个可审核的基础版本</h3><p>十一阶段已贯通人物、事实、对白、时间、事件、地点与关系草稿；所有结论仍保留人工闸门。</p></div>
-            <div className="foundation-launch-actions"><button className="button ghost" onClick={onOpenRefinement}>打开统一精修</button><button className="button primary" onClick={onOpenWorkflow}>打开一键生成</button></div>
+             <div className="foundation-launch-actions"><button className="button ghost" onClick={onOpenRefinement}>打开统一精修</button><label>整书分析档位<select aria-label="整书分析档位" value={profile} onChange={event => onProfileChange(event.target.value as 'low' | 'medium' | 'high')}><option value="low">低 · 快速草稿</option><option value="medium">中 · 均衡生成</option><option value="high">高 · 深度生成</option></select></label><button className="button primary" onClick={onOpenWorkflow}>打开一键生成</button></div>
           </div>
           <div className="next-grid">
             <article><span>01</span><h3>检查章节边界</h3><p>快速浏览自动识别结果，必要时拆分或合并。</p></article>
@@ -672,9 +676,11 @@ const foundationStateLabels: Record<FoundationWorkflowRunRecord['state'], string
   cancelled: '已取消',
 };
 
-function FoundationWorkflowView({ run }: { run: RunHelper }) {
+function FoundationWorkflowView({ run, profile, onProfileChange }: { run: RunHelper; profile: 'low' | 'medium' | 'high'; onProfileChange: (profile: 'low' | 'medium' | 'high') => void }) {
   const [workflows, setWorkflows] = useState<FoundationWorkflowRunRecord[]>([]);
+  const [usage, setUsage] = useState<FoundationUsageSummary | null>(null);
   const [model, setModel] = useState('');
+  const [tokenBudgetInput, setTokenBudgetInput] = useState('');
   const [apiConfigured, setApiConfigured] = useState(false);
 
   const load = useCallback(async () => {
@@ -685,10 +691,14 @@ function FoundationWorkflowView({ run }: { run: RunHelper }) {
     setApiConfigured(status.configured);
     setModel((current) => current || status.preferredModel || '');
     setWorkflows(records);
+    setUsage(records[0] ? await window.novelCompiler.getFoundationUsage(records[0].id) : null);
   }, []);
 
   useEffect(() => { void load().catch(() => undefined); }, [load]);
   const latest = workflows[0] ?? null;
+  useEffect(() => { setTokenBudgetInput(latest?.tokenBudget?.toString() ?? ''); }, [latest?.id]);
+  const budgetReached = Boolean(latest?.tokenBudget && usage
+    && usage.inputTokens + usage.outputTokens >= Math.ceil(latest.tokenBudget * 0.95));
   useEffect(() => {
     if (!latest || !['running', 'queued'].includes(latest.state)) return;
     const timer = window.setInterval(() => void load().catch(() => undefined), 1000);
@@ -697,7 +707,8 @@ function FoundationWorkflowView({ run }: { run: RunHelper }) {
 
   async function start() {
     const value = await run(
-      () => window.novelCompiler.startFoundationWorkflow({ model: model.trim(), profile: 'foundation-v1' }),
+      () => window.novelCompiler.startFoundationWorkflow({ model: model.trim(), profile,
+        tokenBudget: tokenBudgetInput.trim() ? Number(tokenBudgetInput) : null }),
       '一键基础流程已经启动',
     );
     if (value) await load();
@@ -712,6 +723,13 @@ function FoundationWorkflowView({ run }: { run: RunHelper }) {
     if (value) await load();
   }
 
+  async function updateBudgetAndResume() {
+    if (!latest) return;
+    const updated = await run(() => window.novelCompiler.updateFoundationTokenBudget(latest.id,
+      tokenBudgetInput.trim() ? Number(tokenBudgetInput) : null));
+    if (updated) await control('resume');
+  }
+
   return <section className="foundation-workflow-view">
     <PageTitle eyebrow="ONE-CLICK WORLD BUILD" title="一键生成完整世界" description="从原文自动完成人物、事实、对白、时间、事件、地点与关系定稿，并立即生成地图、关系图和角色卡；之后仍可逐项修改。" />
     <div className="foundation-workflow-console panel">
@@ -722,15 +740,30 @@ function FoundationWorkflowView({ run }: { run: RunHelper }) {
       <div className="foundation-progress"><i style={{ width: `${Math.round((latest?.progress ?? 0) * 100)}%` }} /></div>
       <div className="foundation-controls">
         <label><span>人物普查模型 ID（区分大小写）</span><input value={model} onChange={(event) => setModel(event.target.value)} placeholder="读取 API 设置中的首选模型" /></label>
+         <label><span>整书分析档位</span><select value={profile} onChange={(event) => onProfileChange(event.target.value as 'low' | 'medium' | 'high')}>
+          <option value="low">低 · 快速草稿</option><option value="medium">中 · 均衡生成</option><option value="high">高 · 深度生成</option>
+        </select></label>
+         <label><span>本次 Token 上限（可选）</span><input type="number" min={1000} max={1000000000} step={1000} value={tokenBudgetInput} onChange={event => setTokenBudgetInput(event.target.value)} placeholder="留空表示不限" /></label>
         {!latest || ['completed', 'cancelled'].includes(latest.state)
           ? <button className="button primary" disabled={!apiConfigured || !model.trim()} onClick={() => void start()}>一键开始</button>
           : <>
             {latest.state === 'running' && <button className="button ghost" onClick={() => void control('pause')}>暂停</button>}
-            {['paused', 'queued'].includes(latest.state) && <button className="button primary" onClick={() => void control('resume')}>继续</button>}
+             {['paused', 'queued'].includes(latest.state) && (budgetReached
+               ? <button className="button primary" onClick={() => void updateBudgetAndResume()}>更新上限并继续</button>
+               : <button className="button primary" onClick={() => void control('resume')}>继续</button>)}
             {latest.state === 'failed' && <button className="button primary" onClick={() => void control('retry')}>从失败处重试</button>}
             {['running', 'paused', 'queued'].includes(latest.state) && <button className="button ghost danger" onClick={() => void control('cancel')}>取消本次</button>}
           </>}
       </div>
+      <p>低档：全书人物和事件扫描，人物事实按全书均匀抽取最多 800 个直接提及段落，不带邻段；可能漏掉细节。中档：全书扫描，人物事实仅为短段补邻段。高档：保留完整邻段，并增加第二轮事实补漏。三档结果都需检查证据，Token 实际用量以模型响应为准。</p>
+      {latest && <small>本次已报告用量：输入 {usage?.inputTokens.toLocaleString() ?? '—'}、输出 {usage?.outputTokens.toLocaleString() ?? '—'} Token；HTTP 请求 {usage?.attempts ?? '—'} 次，本地结果复用 {usage?.localCacheHits ?? '—'} 次，其中异常／重试 {usage?.failedAttempts ?? '—'} 次、未报告用量 {usage?.unreportedAttempts ?? '—'} 次。{usage && usage.cacheHitTokens + usage.cacheMissTokens > 0 ? `网关报告的前缀缓存命中 ${usage.cacheHitTokens.toLocaleString()}、未命中 ${usage.cacheMissTokens.toLocaleString()} Token；具体折扣以网关账单为准。` : '网关前缀缓存用量未确认。'}{latest.tokenBudget ? `本次上限 ${latest.tokenBudget.toLocaleString()} Token，接近时自动暂停；在途请求可能略超。` : '本次未设置 Token 上限。'}</small>}
+      {usage && Object.keys(usage.stages).length > 0 && <details className="foundation-usage-stages">
+        <summary>按阶段查看 Token 用量</summary>
+        {Object.entries(usage.stages).map(([stage, item]) => <p key={stage}>
+          <strong>{foundationStepLabels[stage as FoundationWorkflowStepKey]?.title ?? stage}</strong>：输入 {item.inputTokens.toLocaleString()}、输出 {item.outputTokens.toLocaleString()} Token；请求 {item.attempts} 次，结果复用 {item.localCacheHits} 次，异常／重试 {item.failedAttempts} 次，未报告用量 {item.unreportedAttempts} 次{item.cacheHitTokens + item.cacheMissTokens > 0 ? `；网关前缀缓存命中 ${item.cacheHitTokens.toLocaleString()}／未命中 ${item.cacheMissTokens.toLocaleString()} Token` : ''}
+        </p>)}
+      </details>}
+      {latest && <small>当前流程档位：{(latest.profile === 'low' ? '低' : latest.profile === 'medium' ? '中' : latest.profile === 'high' ? '高' : latest.profile === 'foundation-v1' ? '旧版' : latest.profile)}</small>}
       {!apiConfigured && <div className="foundation-warning">还没有可用的 API 设置。请先到左侧“API 设置”保存并测试连接。</div>}
     </div>
     <div className="foundation-boundary">
@@ -1163,7 +1196,7 @@ function CharactersView({ chunks, jobs, run }: { chunks: ChunkRecord[]; jobs: Jo
   return <section>
     <PageTitle eyebrow="CHARACTER CENSUS" title="人物普查" description="模型只提交候选；正式身份由原文证据和你的审核共同决定。上下文重叠区不会重复产生人物。" />
     <div className="scan-toolbar panel">
-      <div><span>分析分块</span><strong>{estimate?.chunkCount ?? chunks.length}</strong><small>{estimate?.ready ? `约 ${(estimate.approximateInputTokens / 1000).toFixed(1)}K 输入 Token` : '请先生成分析分块'}</small></div>
+      <div><span>分析分块</span><strong>{estimate?.chunkCount ?? chunks.length}</strong><small>{estimate?.ready ? `正文粗算 ${(estimate.approximateInputTokens / 1000).toFixed(1)}K Token；不含提示词、输出与重试` : '请先生成分析分块'}</small></div>
       <div><span>候选人物</span><strong>{characters.filter((item) => item.reviewStatus !== 'rejected').length}</strong><small>{characters.filter((item) => item.reviewStatus === 'confirmed').length} 个已确认</small></div>
       <div className="scan-model"><label>扫描模型</label><input value={model} onChange={(event) => setModel(event.target.value)} /></div>
       <button className="button primary" disabled={!estimate?.ready || scanJob?.state === 'running' || !model.trim()} onClick={() => void startScan()}>
@@ -1202,7 +1235,7 @@ function CharactersView({ chunks, jobs, run }: { chunks: ChunkRecord[]; jobs: Jo
           {identityLinks.length > 0 && <div className="identity-suggestions"><div className="evidence-heading"><strong>身份关系建议</strong><span>确认“不同人物”后会成为硬约束</span></div>{identityLinks.map((link) => <article key={link.id} className={link.reviewStatus}><div><strong>{link.otherName}</strong><span>{link.relation === 'must_link' ? '可能是同一人物' : link.relation === 'cannot_link' ? '明确是不同人物' : '身份暂不确定'} · {(link.confidence * 100).toFixed(0)}%</span><p>{link.reason}</p></div><div><button disabled={link.reviewStatus === 'confirmed'} onClick={() => void reviewIdentityLink(link, 'confirmed')}>确认</button><button disabled={link.reviewStatus === 'rejected'} onClick={() => void reviewIdentityLink(link, 'rejected')}>排除</button>{link.reviewStatus !== 'pending' && <button onClick={() => void reviewIdentityLink(link, 'pending')}>恢复</button>}</div></article>)}</div>}
           {selected.uncertainty && <div className="uncertainty">待核实：{selected.uncertainty}</div>}
           <div className="fact-section">
-            <div className="fact-toolbar"><div><strong>人物事实档案</strong><span>{factEstimate?.ready ? `${factEstimate.paragraphCount} 段材料 · ${factEstimate.batchCount} 批 · 约 ${((factEstimate.approximateInputTokens * factPasses) / 1000).toFixed(1)}K 输入 Token` : '确认人物后收集相关原文'}</span></div><div className="fact-run-controls"><label><span>抽取强度</span><select value={factPasses} onChange={(event) => setFactPasses(Number(event.target.value) === 2 ? 2 : 1)}><option value={1}>单轮精确</option><option value={2}>双轮补漏</option></select></label><button className="button primary" disabled={selected.reviewStatus !== 'confirmed' || !factEstimate?.ready || factJob?.state === 'running'} onClick={() => void startFactExtraction()}>{factJob?.state === 'running' ? `提取中 ${Math.round(factJob.progress * 100)}%` : facts.length ? '按当前材料重新检查' : '提取人物档案'}</button></div></div>
+            <div className="fact-toolbar"><div><strong>人物事实档案</strong><span>{factEstimate?.ready ? `${factEstimate.paragraphCount} 段材料 · ${factEstimate.batchCount} 批 · 正文粗算 ${((factEstimate.approximateInputTokens * factPasses) / 1000).toFixed(1)}K Token（不含提示词、输出与重试）` : '确认人物后收集相关原文'}</span></div><div className="fact-run-controls"><label><span>抽取强度</span><select value={factPasses} onChange={(event) => setFactPasses(Number(event.target.value) === 2 ? 2 : 1)}><option value={1}>单轮精确</option><option value={2}>双轮补漏</option></select></label><button className="button primary" disabled={selected.reviewStatus !== 'confirmed' || !factEstimate?.ready || factJob?.state === 'running'} onClick={() => void startFactExtraction()}>{factJob?.state === 'running' ? `提取中 ${Math.round(factJob.progress * 100)}%` : facts.length ? '按当前材料重新检查' : '提取人物档案'}</button></div></div>
             {facts.length > 0 ? <div className="fact-workspace"><div className="fact-list">{facts.map((fact) => <article key={fact.id} className={`${fact.id === selectedFact?.id ? 'selected' : ''} ${fact.reviewStatus}`} onClick={() => setSelectedFactId(fact.id)}>
               <div><span>{factCategoryLabels[fact.category]} · {assertionModeLabels[fact.assertionMode]}</span><small>{(fact.confidence * 100).toFixed(0)}% · {fact.evidenceCount} 条证据</small></div><strong>{fact.predicate}：{fact.value}</strong><footer><button disabled={fact.reviewStatus === 'confirmed'} onClick={(event) => { event.stopPropagation(); void reviewFact(fact, 'confirmed'); }}>确认</button><button disabled={fact.reviewStatus === 'rejected'} onClick={(event) => { event.stopPropagation(); void reviewFact(fact, 'rejected'); }}>排除</button>{fact.reviewStatus !== 'pending' && <button onClick={(event) => { event.stopPropagation(); void reviewFact(fact, 'pending'); }}>恢复</button>}</footer>
             </article>)}</div>{selectedFact && <div className="fact-detail"><strong>{selectedFact.predicate}</strong><p>{selectedFact.value}</p><small>{truthStatusLabels[selectedFact.truthStatus]} · 第 {selectedFact.extractionPass} 轮{selectedFact.attributedSourceName ? ` · 来源：${selectedFact.attributedSourceName}` : ''}</small>{selectedFact.reasoningNote && <small>{selectedFact.reasoningNote}</small>}<div>{factEvidence.map((evidence) => <blockquote key={evidence.id}><span>{evidence.chapterTitle ?? '未分章'} · 段落 {evidence.paragraphOrdinal}</span>{evidence.exactQuote}<button className="source-span-link" type="button" aria-label="查看人物事实证据原文" disabled={!evidence.sourceSpanId} onClick={() => evidence.sourceSpanId && void openSourceSpan(evidence.sourceSpanId)}>查看原文</button></blockquote>)}</div></div>}</div> : <p className="no-facts">{selected.reviewStatus === 'confirmed' ? '尚未提取人物事实。提取前会显示材料量，不会上传整本无关正文。' : '先确认这个人物，才能开始提取档案。'}</p>}
@@ -1561,7 +1594,7 @@ function TimelineView({ run, jobs }: { run: RunHelper; jobs: JobRecord[] }) {
       <label><span>规范时间值</span><input value={normalizedDrafts[expression.id] ?? ''} onChange={(event) => setNormalizedDrafts((current) => ({ ...current, [expression.id]: event.target.value }))} placeholder={expression.expressionType === 'relative' ? '保留相对关系，待事件连接后锚定' : '无法可靠规范化时可以留空'} /></label>
       <footer><span>{expression.detectionMethod === 'rule' ? '本地规则识别' : expression.detectionMethod === 'model' ? '模型识别' : '人工添加'} · {expression.calendarSystem}</span><div><button disabled={expression.reviewStatus === 'confirmed'} onClick={() => void review(expression, 'confirmed')}>确认</button><button disabled={expression.reviewStatus === 'rejected'} onClick={() => void review(expression, 'rejected')}>排除</button>{expression.reviewStatus !== 'pending' && <button onClick={() => void review(expression, 'pending')}>恢复</button>}</div></footer>
     </article>)}</div> : <div className="simple-empty">{summary.totalCount ? '当前筛选条件下没有时间表达。' : '尚未扫描。扫描在本机完成，不调用 API，也不会修改小说原文。'}</div>}
-    <div className="timeline-event-heading"><div><p>EVENT EVIDENCE</p><h3>候选事件</h3><span>{eventEstimate?.ready ? `${eventEstimate.chunkCount} 个分块 · 约 ${(eventEstimate.approximateInputTokens / 1000).toFixed(1)}K 输入 Token` : '请先生成分析分块'}</span></div><div className="timeline-event-run"><label><span>事件模型</span><input value={eventModel} onChange={(event) => setEventModel(event.target.value)} /></label><button className="button primary" disabled={!eventEstimate?.ready || !eventModel.trim() || eventJob?.state === 'running'} onClick={() => void startEventExtraction()}>{eventJob?.state === 'running' ? `抽取中 ${Math.round(eventJob.progress * 100)}%` : events.length ? '按当前方案重新检查' : '提取候选事件'}</button></div></div>
+    <div className="timeline-event-heading"><div><p>EVENT EVIDENCE</p><h3>候选事件</h3><span>{eventEstimate?.ready ? `${eventEstimate.chunkCount} 个分块 · 正文粗算 ${(eventEstimate.approximateInputTokens / 1000).toFixed(1)}K Token（不含提示词、输出与重试）` : '请先生成分析分块'}</span></div><div className="timeline-event-run"><label><span>事件模型</span><input value={eventModel} onChange={(event) => setEventModel(event.target.value)} /></label><button className="button primary" disabled={!eventEstimate?.ready || !eventModel.trim() || eventJob?.state === 'running'} onClick={() => void startEventExtraction()}>{eventJob?.state === 'running' ? `抽取中 ${Math.round(eventJob.progress * 100)}%` : events.length ? '按当前方案重新检查' : '提取候选事件'}</button></div></div>
     {events.length ? <div className="timeline-event-layout">
       <div className="timeline-event-list panel">{events.map((event) => <button className={`${event.id === selectedEvent?.id ? 'selected' : ''} ${event.reviewStatus}`} key={event.id} onClick={() => setSelectedEventId(event.id)}><span>{event.chapterTitle ?? '未分章'} · 段落 {event.narrativeStartOrdinal}{event.narrativeEndOrdinal !== event.narrativeStartOrdinal ? `–${event.narrativeEndOrdinal}` : ''}</span><strong>{event.title}</strong><small>{timelineEventTypeLabels[event.eventType]} · {event.evidenceCount} 条证据</small></button>)}</div>
       {selectedEvent && <div className="timeline-event-detail panel"><header><div><span>{timelineEventTypeLabels[selectedEvent.eventType]} · {(selectedEvent.confidence * 100).toFixed(0)}%</span><h3>{selectedEvent.title}</h3></div><div><button disabled={selectedEvent.reviewStatus === 'confirmed'} onClick={() => void reviewEvent(selectedEvent, 'confirmed')}>确认</button><button disabled={selectedEvent.reviewStatus === 'rejected'} onClick={() => void reviewEvent(selectedEvent, 'rejected')}>排除</button>{selectedEvent.reviewStatus !== 'pending' && <button onClick={() => void reviewEvent(selectedEvent, 'pending')}>恢复</button>}</div></header><p>{selectedEvent.summary}</p>{selectedEvent.uncertainty && <small>待核实：{selectedEvent.uncertainty}</small>}<div className="event-entities"><div><strong>参与人物</strong><p>{eventParticipants.length ? eventParticipants.map((item) => `${item.identityName ?? item.surfaceName}${item.actionText ? `（${item.actionText}）` : ''}`).join('、') : '未识别'}</p></div><div><strong>地点</strong><p>{eventLocations.length ? eventLocations.map((item) => item.normalizedName ?? item.surfaceName).join('、') : '未识别'}</p></div></div><div className="event-evidence"><strong>原文证据</strong>{eventEvidence.map((item) => <blockquote key={item.id}><span>{item.chapterTitle ?? '未分章'} · 段落 {item.paragraphOrdinal}</span>{item.exactQuote}<button className="source-span-link" type="button" aria-label="查看事件证据原文" disabled={!item.sourceSpanId} onClick={() => item.sourceSpanId && void openSourceSpan(item.sourceSpanId)}>查看原文</button></blockquote>)}</div></div>}
@@ -2184,7 +2217,7 @@ function RelationshipWorkbench({ run, jobs }: { run: RunHelper; jobs: JobRecord[
   async function startScan(mode: 'local' | 'model') {
     const result = await run(() => window.novelCompiler.startRelationshipScan(mode === 'model' ? {
       mode: 'model', model, promptVersion: 'relationship-model.v1',
-    } : { mode: 'local', extractorVersion: 'local-v1' }), mode === 'model'
+    } : { mode: 'local', extractorVersion: 'local-v2' }), mode === 'model'
       ? '模型关系抽取已启动；结果只会进入待审核候选层'
       : '本地关系候选扫描已启动');
     if (result) await reload();

@@ -6,9 +6,39 @@ import { ProjectStore } from '../../electron/worker/project-store';
 import { inspectProjectBundle, listProjectPlayableEntries } from '../../electron/main/project-bundle-discovery';
 import { PlayableBundleValidationService } from '../../electron/worker/playable-bundle-validation-service';
 import { PlaySessionPreparationService } from '../../electron/worker/play-session-preparation-service';
+import { CharacterFactService } from '../../electron/worker/character-fact-service';
 
 const sample = process.env.NOVEL_REDESIGN_SAMPLE;
 describe.runIf(Boolean(sample))('existing paid project in a protected test copy', () => {
+  it('compares three fact extraction material sizes for frequent characters without model calls', async () => {
+    if (!sample || !path.resolve(sample).includes('.codex-redesign-audit')) throw new Error('Only use the designated test-copy directory');
+    const store = new ProjectStore();
+    try {
+      await store.open(sample);
+      const { db } = store.get();
+      const revisionId = store.getSummary()!.activeRevisionId!;
+      const identities = db.prepare(`SELECT i.id, i.canonical_name AS name, COUNT(m.paragraph_id) AS mentions
+        FROM person_identities i JOIN person_mentions m ON m.identity_id = i.id
+        WHERE i.revision_id = ? AND i.review_status = 'confirmed'
+        GROUP BY i.id ORDER BY mentions DESC LIMIT 8`).all(revisionId) as Array<{ id: string; name: string; mentions: number }>;
+      expect(identities.length).toBeGreaterThan(0);
+      const service = new CharacterFactService(store) as unknown as { collectMaterial: (
+        database: typeof db, revision: string, identity: string, version: string,
+      ) => Array<{ paragraphId: string; text: string }> };
+      const rows = identities.map(identity => {
+        const tiers = (['low', 'medium', 'high'] as const).map(profile => {
+          const material = service.collectMaterial(db, revisionId, identity.id, `character_facts.v3.${profile}`);
+          return { profile, paragraphs: material.length, characters: material.reduce((sum, item) => sum + item.text.length, 0) };
+        });
+        expect(tiers[0].characters).toBeLessThanOrEqual(tiers[1].characters);
+        expect(tiers[1].characters).toBeLessThanOrEqual(tiers[2].characters);
+        return { name: identity.name, mentions: identity.mentions, tiers };
+      });
+      await fs.writeFile(path.join(path.dirname(sample), 'foundation-material-ab-result.json'),
+        JSON.stringify({ scope: 'eight most mentioned confirmed characters', modelCalls: 0, rows }, null, 2), 'utf8');
+    } finally { await store.close(); }
+  }, 180_000);
+
   it('prepares other confirmed entry events offline without changing reviewed cards', async () => {
     if (!sample || !path.resolve(sample).includes('.codex-redesign-audit')) throw new Error('Only use the designated test-copy directory');
     const store = new ProjectStore();
@@ -26,9 +56,26 @@ describe.runIf(Boolean(sample))('existing paid project in a protected test copy'
       expect(plan.preview?.entryEventId).toBe(entry!.id);
       expect(plan.preview?.entryOrdinal).toBe(entry!.ordinal);
       expect(plan.preview?.entryTitle).toBe(entry!.title);
+      expect(plan.preview?.ruleKinshipPairCount).toBeGreaterThan(0);
       expect(plan.narratorCard.data.scenario).toContain(entry!.title);
       expect(plan.preview?.startingScene?.evidenceOrdinals.every(ordinal => ordinal <= entry!.ordinal)).toBe(true);
       expect(plan.sessionWorldBook.extensions.novel_world_compiler.entry_ordinal).toBe(entry!.ordinal);
+      const profilePlans = (['low', 'medium', 'high'] as const).map(playProfile => service.prepareLive(entry!.id, {
+        mode: 'narrator', entryEventId: entry!.id, playProfile,
+        persona: { name: '离线测试旅人', description: '' },
+      }));
+      expect(profilePlans.map(item => item.preview?.worldTokenBudget)).toEqual([512, 1024, 2048]);
+      expect(new Set(profilePlans.map(item => item.resourceKey)).size).toBe(3);
+      for (const item of profilePlans) {
+        expect(item.preview?.startingScene?.evidenceOrdinals.every(ordinal => ordinal <= entry!.ordinal)).toBe(true);
+      }
+      const runtimeChars = profilePlans.map(item => item.preview?.characters.reduce((sum, character) => sum + character.runtimeChars, 0) ?? 0);
+      expect(runtimeChars[0]).toBeLessThanOrEqual(runtimeChars[1]);
+      expect(runtimeChars[1]).toBeLessThanOrEqual(runtimeChars[2]);
+      for (const [index, profile] of (['low', 'medium', 'high'] as const).entries()) {
+        await fs.writeFile(path.join(path.dirname(sample), `session-worldbook-${profile}.json`),
+          JSON.stringify(profilePlans[index].sessionWorldBook), 'utf8');
+      }
       const place = plan.preview?.availablePlaces[0];
       if (place) {
         const chosen = service.prepareLive(entry!.id, { mode: 'narrator', entryEventId: entry!.id,
@@ -47,7 +94,7 @@ describe.runIf(Boolean(sample))('existing paid project in a protected test copy'
       expect(() => service.prepareLive('not-an-event')).toThrow('进入事件');
       await fs.writeFile(path.join(path.dirname(sample), 'alternate-entry-result.json'), JSON.stringify({
         entry, characters: plan.preview?.characters.length, places: plan.preview?.availablePlaces.length,
-        worldEntries: plan.preview?.worldEntryCount,
+        worldEntries: plan.preview?.worldEntryCount, profileRuntimeChars: runtimeChars,
       }, null, 2));
     } finally { await store.close(); }
   }, 180_000);

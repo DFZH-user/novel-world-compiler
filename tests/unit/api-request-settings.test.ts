@@ -1,10 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-const state = vi.hoisted(() => ({ stored: '', writes: [] as string[] }));
+const state = vi.hoisted(() => ({ stored: '', writes: [] as string[], usageLines: [] as string[] }));
 vi.mock('electron', () => ({ app: { getPath: () => '/settings-test' }, safeStorage: { isEncryptionAvailable: () => true, encryptString: () => Buffer.from('encrypted-test'), decryptString: () => 'mock-key' } }));
 vi.mock('node:fs/promises', () => ({ default: {
   readFile: async () => state.stored,
   mkdir: async () => {},
   writeFile: async (_path: string, content: string) => { state.stored = content; state.writes.push(content); },
+  appendFile: async (_path: string, content: string) => { state.usageLines.push(content); },
 } }));
 import { apiRequestSettingsSchema, defaultApiRequestSettings } from '../../src/shared/api-request-settings';
 import { getApiStatus, saveApiConfig, requestJsonCompletion, requestTextCompletion } from '../../electron/main/secure-config';
@@ -12,7 +13,7 @@ import { buildJsonCompletionAttempts } from '../../electron/main/model-request-p
 import { CompletionJsonError, nextCensusJsonBudget } from '../../electron/main/completion-json';
 const connection = { provider: 'Mock', baseUrl: 'https://mock.invalid/v1', preferredModel: 'deepseek-flash' };
 const successfulResponse = () => new Response(JSON.stringify({ choices: [{ finish_reason: 'stop', message: { content: '{"characters":[]}' } }] }));
-beforeEach(() => { state.stored = JSON.stringify({ ...connection, encryptedKey: 'existing-encrypted-key' }); state.writes = []; });
+beforeEach(() => { state.stored = JSON.stringify({ ...connection, encryptedKey: 'existing-encrypted-key' }); state.writes = []; state.usageLines = []; });
 afterEach(() => vi.unstubAllGlobals());
 describe('editable API preferences', () => {
   it('loads legacy defaults, round-trips settings and retains the existing encrypted key', async () => {
@@ -33,10 +34,23 @@ describe('editable API preferences', () => {
     try {
       await requestJsonCompletion({ model: 'deepseek-flash', system: 's', user: 'u' });
       await requestTextCompletion({ model: 'deepseek-flash', system: 's', user: 'u', maxTokens: 500 });
+      await requestTextCompletion({ model: 'deepseek-flash', system: 's', user: 'u' });
       expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toMatchObject({ max_tokens: 65536, temperature: 0, top_p: 0.8, frequency_penalty: 0.2, presence_penalty: -0.1, seed: 42 });
-      expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({ max_tokens: 8192, temperature: 0.9 });
+      expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toMatchObject({ max_tokens: 500, temperature: 0.9 });
+      expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toMatchObject({ max_tokens: 8192, temperature: 0.9 });
       expect(timeout).toHaveBeenCalledWith(600000);
     } finally { timeout.mockRestore(); }
+  });
+  it('records reported tokens even when a model reply cannot be decoded', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      choices: [{ finish_reason: 'length', message: { content: '{"facts":[' } }],
+      usage: { prompt_tokens: 123, completion_tokens: 45, prompt_cache_hit_tokens: 67 },
+    }))));
+    await expect(requestJsonCompletion({ model: 'deepseek-flash', system: 's', user: 'u',
+      usageContext: { jobId: 'job-1', stage: 'character_facts' } })).rejects.toThrow();
+    expect(state.usageLines).toHaveLength(1);
+    expect(JSON.parse(state.usageLines[0])).toMatchObject({ jobId: 'job-1', stage: 'character_facts',
+      outcome: 'invalid_response', inputTokens: 123, outputTokens: 45, cacheHitTokens: 67 });
   });
   it('sends the campus API ID even when a failed workflow saved the catalog label', async () => {
     state.stored = JSON.stringify({ provider: 'BUPT', baseUrl: 'https://myai.bupt.edu.cn/llm-gw/v1',

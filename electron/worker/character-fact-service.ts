@@ -11,6 +11,7 @@ import type {
 import type { ProjectStore } from './project-store';
 import type { SQLiteDatabase } from './sqlite-db';
 import { withTransaction } from './db-utils';
+import { factPolicyForPromptVersion, sampleEvenly } from '../../src/shared/foundation-profile';
 
 function now(): string { return new Date().toISOString(); }
 function hash(value: string): string { return createHash('sha256').update(value).digest('hex'); }
@@ -123,9 +124,56 @@ export class CharacterFactService {
     const promptVersion = promptVersionInput.trim().slice(0, 100);
     const extractionPasses: 1 | 2 = extractionPassesInput === 2 ? 2 : 1;
     if (!model || !promptVersion) throw new Error('模型和提示词版本不能为空');
-    const material = this.collectMaterial(db, revisionId, identityId);
+    const fullMaterial = this.collectMaterial(db, revisionId, identityId, promptVersion);
+    if (!fullMaterial.length) throw new Error('这个人物没有可用于档案提取的原文材料');
+    // Keep facts from completed lower-tier runs. An upgrade only sends new text,
+    // plus high-tier review material with weak or missing important claims.
+    const coverageRuns = promptVersion === 'character_facts.v3.medium' || promptVersion === 'character_facts.v3.high'
+      ? db.prepare(`SELECT r.id, r.job_id AS jobId, r.prompt_version AS promptVersion FROM character_fact_runs r
+        JOIN jobs j ON j.id = r.job_id WHERE r.project_id = ? AND r.revision_id = ?
+        AND r.identity_id = ? AND r.model = ? AND j.state = 'completed'
+        AND r.prompt_version IN (${promptVersion === 'character_facts.v3.medium'
+          ? "'character_facts.v3.low'" : "'character_facts.v3.low', 'character_facts.v3.medium'"})
+        ORDER BY r.updated_at DESC`)
+        .all(projectId, revisionId, identityId, model) as Array<{ id: string; jobId: string; promptVersion: string }>
+      : [];
+    const coveredIds = new Set<string>();
+    for (const run of coverageRuns) {
+      const completed = db.prepare(`SELECT paragraph_ids_json AS paragraphIds FROM character_fact_batches
+        WHERE run_id = ? AND status = 'completed'`).all(run.id) as Array<{ paragraphIds: string }>;
+      for (const batch of completed) for (const id of JSON.parse(batch.paragraphIds) as string[]) coveredIds.add(id);
+    }
+    const reviewIds = new Set<string>();
+    if (promptVersion === 'character_facts.v3.high' && coveredIds.size) {
+      const placeholders = coverageRuns.map(() => '?').join(',');
+      const categories = db.prepare(`SELECT DISTINCT f.category FROM character_facts f
+        WHERE f.run_id IN (${placeholders}) AND f.review_status != 'rejected'`)
+        .all(...coverageRuns.map(run => run.id)) as Array<{ category: string }>;
+      if (!categories.length) {
+        // No usable facts survived the cheaper analysis: revisit all covered text.
+        for (const id of coveredIds) reviewIds.add(id);
+      } else {
+        const weak = db.prepare(`SELECT DISTINCT e.paragraph_id AS paragraphId FROM character_facts f
+          JOIN character_fact_evidence e ON e.fact_id = f.id
+          LEFT JOIN character_fact_claim_metadata m ON m.fact_id = f.id
+          WHERE f.run_id IN (${placeholders}) AND f.review_status != 'rejected'
+            AND (f.confidence < 0.8 OR m.truth_status IN ('suspected', 'disputed', 'unknown'))`)
+          .all(...coverageRuns.map(run => run.id)) as Array<{ paragraphId: string }>;
+        for (const item of weak) reviewIds.add(item.paragraphId);
+        const found = new Set(categories.map(item => item.category));
+        if (['identity', 'status', 'relationship'].some(category => !found.has(category))) {
+          const coveredMaterial = fullMaterial.filter(item => coveredIds.has(item.paragraphId));
+          for (const item of sampleEvenly(coveredMaterial, 12)) reviewIds.add(item.paragraphId);
+        }
+      }
+    }
+    const material = fullMaterial.filter((paragraph) => !coveredIds.has(paragraph.paragraphId)
+      || reviewIds.has(paragraph.paragraphId));
+    if (!material.length && coverageRuns.length) {
+      const prior = coverageRuns.find(run => run.promptVersion === 'character_facts.v3.medium') ?? coverageRuns[0];
+      return { jobId: prior.jobId, runId: prior.id, state: 'completed', reused: true };
+    }
     const batches = buildBatches(material);
-    if (!batches.length) throw new Error('这个人物没有可用于档案提取的原文材料');
     const inputHash = hash(JSON.stringify({
       revisionId,
       identityId,
@@ -137,6 +185,7 @@ export class CharacterFactService {
       draftSelectionRunId,
       draftSelectionInputHash,
       draftSelectionItemHash,
+      reusedRunIds: coverageRuns.map(run => run.id),
       material: material.map((item) => [item.paragraphId, hash(item.text)]),
     }));
     const existing = db.prepare(`SELECT r.id, r.job_id AS jobId, j.state FROM character_fact_runs r JOIN jobs j ON j.id = r.job_id
@@ -328,21 +377,37 @@ export class CharacterFactService {
     return this.listFacts(fact.identityId);
   }
 
-  private collectMaterial(db: SQLiteDatabase, revisionId: string, identityId: string): MaterialParagraph[] {
+  private collectMaterial(db: SQLiteDatabase, revisionId: string, identityId: string, promptVersion = 'character_facts.v2'): MaterialParagraph[] {
     const identity = db.prepare(`SELECT canonical_name AS name, review_status AS reviewStatus FROM person_identities WHERE id = ? AND revision_id = ?`)
       .get(identityId, revisionId) as { name: string; reviewStatus: string } | undefined;
     if (!identity) throw new Error('找不到人物');
-    const ordinals = new Set<number>();
-    const mentions = db.prepare(`SELECT DISTINCT p.ordinal FROM person_mentions m JOIN paragraphs p ON p.id = m.paragraph_id
-      WHERE m.identity_id = ? ORDER BY p.ordinal`).all(identityId) as Array<{ ordinal: number }>;
-    for (const mention of mentions) { ordinals.add(Number(mention.ordinal) - 1); ordinals.add(Number(mention.ordinal)); ordinals.add(Number(mention.ordinal) + 1); }
+    const policy = factPolicyForPromptVersion(promptVersion);
+    const direct = new Map<number, number>();
+    const mentions = db.prepare(`SELECT DISTINCT p.ordinal, length(p.text) AS characterCount FROM person_mentions m JOIN paragraphs p ON p.id = m.paragraph_id
+      WHERE m.identity_id = ? ORDER BY p.ordinal`).all(identityId) as Array<{ ordinal: number; characterCount: number }>;
+    for (const mention of mentions) direct.set(Number(mention.ordinal), Number(mention.characterCount));
     const names = [identity.name, ...(db.prepare(`SELECT DISTINCT alias FROM person_aliases WHERE identity_id = ? AND review_status = 'confirmed'`)
       .all(identityId) as Array<{ alias: string }>).map((row) => row.alias)];
     for (const name of [...new Set(names)].filter(Boolean)) {
-      const hits = db.prepare(`SELECT p.ordinal FROM paragraphs p LEFT JOIN paragraph_exclusions x ON x.paragraph_id = p.id
+      const hits = db.prepare(`SELECT p.ordinal, length(p.text) AS characterCount FROM paragraphs p LEFT JOIN paragraph_exclusions x ON x.paragraph_id = p.id
         WHERE p.revision_id = ? AND COALESCE(x.excluded, 0) = 0 AND instr(p.text, ?) > 0 ORDER BY p.ordinal`)
-        .all(revisionId, name) as Array<{ ordinal: number }>;
-      for (const hit of hits) { ordinals.add(Number(hit.ordinal) - 1); ordinals.add(Number(hit.ordinal)); ordinals.add(Number(hit.ordinal) + 1); }
+        .all(revisionId, name) as Array<{ ordinal: number; characterCount: number }>;
+      for (const hit of hits) direct.set(Number(hit.ordinal), Number(hit.characterCount));
+    }
+    const selected = policy.maxDirectParagraphs === null
+      ? [...direct.entries()].sort((left, right) => left[0] - right[0])
+      : sampleEvenly([...direct.entries()].sort((left, right) => left[0] - right[0]), policy.maxDirectParagraphs);
+    const ordinals = new Set<number>();
+    for (const [ordinal, characters] of selected) {
+      ordinals.add(ordinal);
+      // Novel imports often split prose into short paragraphs. A 140-character
+      // cutoff pulled nearly every neighbour into the medium tier, making it
+      // cost almost the same as high on a real long novel. Keep context only
+      // for very short mentions that are most likely to need disambiguation.
+      if (policy.context === 'full' || (policy.context === 'short' && characters < 60)) {
+        ordinals.add(ordinal - 1);
+        ordinals.add(ordinal + 1);
+      }
     }
     const values = [...ordinals].filter((ordinal) => ordinal > 0).sort((a, b) => a - b);
     if (!values.length) return [];

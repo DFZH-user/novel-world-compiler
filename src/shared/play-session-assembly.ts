@@ -65,12 +65,40 @@ export function buildSessionAssemblyPlan(
   const fingerprint = manifest.source_fingerprints.bundle;
   const resourceKey = `${projectId}:${revisionId}:${fingerprint}`;
   const entries: SessionWorldBook['entries'] = {};
+  const duplicateRelationships = new Map<string, SillyTavernWorldInfoEntry>();
   let uid = 0;
-  for (const source of [relationships.entries, places.entries]) {
-    for (const entry of Object.values(source)) {
-      entries[String(uid)] = { ...entry, uid, displayIndex: uid };
-      uid += 1;
+  for (const entry of Object.values(relationships.entries)) {
+    // The source graph keeps community summaries for inspection, but they repeat
+    // individual edges and activate when only one member is mentioned.
+    if (entry.extensions?.novel_world_compiler?.entry_kind === 'community') continue;
+    // A single frequent character name must not activate every one of their relationships.
+    const pair = entry.extensions?.novel_world_compiler?.entry_kind === 'relationship' && entry.key.length >= 2;
+    const copied = { ...entry, extensions: entry.extensions ? {
+      ...entry.extensions,
+      novel_world_compiler: { ...entry.extensions.novel_world_compiler,
+        source_relationship_ids: [...entry.extensions.novel_world_compiler.source_relationship_ids],
+        source_evidence_ids: [...entry.extensions.novel_world_compiler.source_evidence_ids] },
+    } : entry.extensions };
+    const sessionEntry = pair
+      ? { ...copied, uid, displayIndex: uid, key: [entry.key[0]], keysecondary: [entry.key[1]], selective: true, selectiveLogic: 0 }
+      : { ...copied, uid, displayIndex: uid };
+    const duplicateKey = pair ? JSON.stringify([sessionEntry.key, sessionEntry.keysecondary,
+      sessionEntry.content, sessionEntry.order, sessionEntry.position]) : undefined;
+    const previous = duplicateKey ? duplicateRelationships.get(duplicateKey) : undefined;
+    if (previous?.extensions?.novel_world_compiler && entry.extensions?.novel_world_compiler) {
+      const target = previous.extensions.novel_world_compiler;
+      const source = entry.extensions.novel_world_compiler;
+      target.source_relationship_ids = [...new Set([...target.source_relationship_ids, ...source.source_relationship_ids])].sort();
+      target.source_evidence_ids = [...new Set([...target.source_evidence_ids, ...source.source_evidence_ids])].sort();
+      continue;
     }
+    entries[String(uid)] = sessionEntry;
+    if (duplicateKey) duplicateRelationships.set(duplicateKey, sessionEntry);
+    uid += 1;
+  }
+  for (const entry of Object.values(places.entries)) {
+    entries[String(uid)] = { ...entry, uid, displayIndex: uid };
+    uid += 1;
   }
   const sessionWorldBook: SessionWorldBook = {
     name: `${manifest.project.name} · 当前游玩世界 P${ordinal}`,

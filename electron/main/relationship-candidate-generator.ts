@@ -68,11 +68,35 @@ function sentenceQuote(text: string, left: Mention, right: Mention): string {
   return text.slice(start, end).trim() || text;
 }
 
-function relationshipType(text: string, left: Mention, right: Mention): string | null {
-  const start = Math.min(left.start, right.start);
-  const end = Math.max(left.end, right.end);
-  const window = text.slice(Math.max(0, start - 20), Math.min(text.length, end + 20));
-  return RELATION_RULES.find((rule) => rule.pattern.test(window))?.type ?? null;
+function relationshipType(text: string, left: Mention, right: Mention, allMentions: Mention[]): string | null {
+  const [first, second] = left.start <= right.start ? [left, right] : [right, left];
+  const between = text.slice(first.end, second.start);
+  if (/[。！？!?；;\n]/u.test(between)) return null;
+  const before = text.slice(0, first.start);
+  const sentenceStart = Math.max(before.lastIndexOf('。'), before.lastIndexOf('！'), before.lastIndexOf('？'),
+    before.lastIndexOf('；'), before.lastIndexOf('\n')) + 1;
+  const after = text.slice(second.end);
+  const nextBoundary = after.search(/[。！？!?；;\n]/u);
+  const sentenceEnd = nextBoundary < 0 ? text.length : second.end + nextBoundary;
+  // When a third named person appears in the same sentence, a kinship word may
+  // refer to that person instead of this pair. Keep it as a reviewable cooccurrence.
+  if (allMentions.some(mention => mention.identityId !== first.identityId
+    && mention.identityId !== second.identityId
+    && mention.start >= sentenceStart && mention.end <= sentenceEnd)) return null;
+
+  const window = text.slice(Math.max(sentenceStart, first.start - 20), Math.min(sentenceEnd, second.end + 20));
+  const rule = RELATION_RULES.find(item => item.pattern.test(window));
+  if (!rule) return null;
+  if (!['父子/父女', '母子/母女', '兄弟', '姐妹', '夫妻'].includes(rule.type)) return rule.type;
+
+  const connector = /[和与跟是乃为叫称的]/u;
+  const betweenMatch = between.match(rule.pattern);
+  const explicitBetween = Boolean(betweenMatch && betweenMatch.index! <= 8
+    && connector.test(between.slice(0, betweenMatch.index)));
+  const afterMatch = after.slice(0, 12).match(rule.pattern);
+  const explicitAfter = Boolean(afterMatch && afterMatch.index! <= 4
+    && between.length <= 12 && connector.test(between));
+  return explicitBetween || explicitAfter ? rule.type : null;
 }
 
 function pairKey(leftIdentityId: string, rightIdentityId: string): [string, string] {
@@ -118,7 +142,7 @@ export function generateLocalRelationshipCandidates(item: RelationshipScanWorkIt
           mentionsByIdentity.get(identities[rightIndex])!,
         );
         const distance = Math.max(0, Math.max(leftMention.start, rightMention.start) - Math.min(leftMention.end, rightMention.end));
-        const proposedType = distance <= 80 ? relationshipType(paragraph.text, leftMention, rightMention) : null;
+        const proposedType = distance <= 80 ? relationshipType(paragraph.text, leftMention, rightMention, mentions) : null;
         if (!proposedType && distance > MAX_COOCCURRENCE_DISTANCE) continue;
         const [sourceIdentityId, targetIdentityId] = pairKey(leftMention.identityId, rightMention.identityId);
         const key = `${sourceIdentityId}:${targetIdentityId}:${proposedType ?? 'cooccurrence'}`;

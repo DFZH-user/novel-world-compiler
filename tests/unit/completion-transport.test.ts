@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 vi.mock('electron', () => ({ app: { getPath: () => '/isolated-model-test' }, safeStorage: { isEncryptionAvailable: () => true, decryptString: () => 'mock-key' } }));
-vi.mock('node:fs/promises', () => ({ default: { readFile: async () => JSON.stringify({ provider: 'Mock', baseUrl: 'https://mock.invalid/v1', encryptedKey: 'bW9jaw==' }) } }));
+vi.mock('node:fs/promises', () => ({ default: {
+  readFile: async () => JSON.stringify({ provider: 'Mock', baseUrl: 'https://mock.invalid/v1', encryptedKey: 'bW9jaw==' }),
+  mkdir: async () => undefined,
+  appendFile: async () => undefined,
+} }));
 import { requestJsonCompletion } from '../../electron/main/secure-config';
 const response = (content: string, finish_reason: string) => new Response(JSON.stringify({ choices: [{ finish_reason, message: { content } }], usage: { prompt_tokens: 10, completion_tokens: 6000 } }), { status: 200 });
 afterEach(() => vi.unstubAllGlobals());

@@ -11,6 +11,8 @@ import type { CharacterScanRunner } from './character-scan-runner';
 import type { RelationshipScanRunner } from './relationship-scan-runner';
 import type { TimelineEventRunner } from './timeline-event-runner';
 import type { WorkerClient } from './worker-client';
+import { normalizeFoundationProfile } from '../../src/shared/foundation-profile';
+import { readTokenUsageSummary } from './token-usage-ledger';
 
 
 function delay(ms: number): Promise<void> {
@@ -27,6 +29,19 @@ export class FoundationWorkflowRunner {
     private readonly timelineEventRunner: TimelineEventRunner,
     private readonly relationshipScanRunner: RelationshipScanRunner,
   ) {}
+
+  private async pauseNearBudget(workflow: FoundationWorkflowRunRecord, childJobId?: string): Promise<boolean> {
+    if (!workflow.tokenBudget || workflow.state !== 'running') return false;
+    const usage = await readTokenUsageSummary(workflow.id);
+    if (usage.inputTokens + usage.outputTokens < Math.ceil(workflow.tokenBudget * 0.95)) return false;
+    if (childJobId) {
+      const child = (await this.worker.request('jobs:list', undefined)).find(job => job.id === childJobId);
+      if (child?.state === 'running') await this.worker.request('jobs:control', { jobId: childJobId, action: 'pause' });
+    }
+    const current = await this.worker.request('workflows:foundation-get', { runId: workflow.id });
+    if (current.state === 'running') await this.worker.request('workflows:foundation-control', { runId: workflow.id, action: 'pause' });
+    return true;
+  }
 
   start(runId: string): void {
     if (this.activeRuns.has(runId)) return;
@@ -101,6 +116,7 @@ export class FoundationWorkflowRunner {
 
       workflow = await this.worker.request('workflows:foundation-get', { runId });
       if (workflow.state !== 'running') return;
+      if (await this.pauseNearBudget(workflow)) return;
       if (!this.completed(workflow, 'character_scan')) {
         await this.runCharacterScan(workflow);
       }
@@ -113,6 +129,7 @@ export class FoundationWorkflowRunner {
 
       workflow = await this.worker.request('workflows:foundation-get', { runId });
       if (workflow.state !== 'running') return;
+      if (await this.pauseNearBudget(workflow)) return;
       if (!this.completed(workflow, 'character_facts')) {
         await this.runCharacterFacts(workflow);
       }
@@ -129,6 +146,7 @@ export class FoundationWorkflowRunner {
 
       workflow = await this.worker.request('workflows:foundation-get', { runId });
       if (workflow.state !== 'running') return;
+      if (await this.pauseNearBudget(workflow)) return;
       if (!this.completed(workflow, 'event_drafts')) await this.runEventDraft(workflow);
 
       workflow = await this.worker.request('workflows:foundation-get', { runId });
@@ -235,11 +253,12 @@ export class FoundationWorkflowRunner {
       progress: childJob?.progress ?? 0,
       childJobId,
     });
-    if (childJob?.state === 'running') this.characterRunner.start(childJobId);
+    if (childJob?.state === 'running') this.characterRunner.start(childJobId, runId);
 
     while (true) {
       const current = await this.worker.request('workflows:foundation-get', { runId });
       if (current.state !== 'running') return;
+      if (await this.pauseNearBudget(current, childJobId)) return;
       const job = (await this.worker.request('jobs:list', undefined)).find((item) => item.id === childJobId);
       if (!job) throw new Error('人物普查子任务已经丢失');
       if (job.state === 'completed') {
@@ -342,6 +361,7 @@ export class FoundationWorkflowRunner {
 
   private async runCharacterFacts(workflow: FoundationWorkflowRunRecord): Promise<void> {
     const runId = workflow.id;
+    const profile = normalizeFoundationProfile(workflow.profile);
     const selection = await this.completedSelection(workflow);
     const selectedItems = selection.items.filter((item) => item.status === 'completed' && item.selected);
     const characters = new Map((await this.worker.request('characters:list', undefined)).map((item) => [item.id, item]));
@@ -387,8 +407,8 @@ export class FoundationWorkflowRunner {
         selectionRunId: selection.id,
         identityId: character.id,
         model: workflow.model,
-        promptVersion: 'character_facts.v2',
-        extractionPasses: 1,
+        promptVersion: profile === 'foundation-v1' ? 'character_facts.v2' : `character_facts.v3.${profile}`,
+        extractionPasses: profile === 'high' ? 2 : 1,
       });
       let job = (await this.worker.request('jobs:list', undefined)).find((item) => item.id === started.jobId);
       if (!job) throw new Error(`“${character.canonicalName}”的人物事实子任务已经丢失`);
@@ -400,11 +420,12 @@ export class FoundationWorkflowRunner {
         progress: (index + job.progress) / total,
         childJobId: job.id,
       });
-      if (job.state === 'running') this.factRunner.start(job.id);
+       if (job.state === 'running') this.factRunner.start(job.id, runId);
 
       while (job.state !== 'completed') {
         const parent = await this.worker.request('workflows:foundation-get', { runId });
         if (parent.state !== 'running') return;
+        if (await this.pauseNearBudget(parent, job.id)) return;
         if (job.state === 'failed') throw new Error(job.message || `“${character.canonicalName}”的人物事实提取失败`);
         if (job.state === 'cancelled') throw new Error(`“${character.canonicalName}”的人物事实子任务已取消`);
         if (job.state === 'paused' || job.state === 'queued') return;
@@ -479,6 +500,7 @@ export class FoundationWorkflowRunner {
     while (true) {
       const current = await this.worker.request('workflows:foundation-get', { runId });
       if (current.state !== 'running') return;
+      if (await this.pauseNearBudget(current, draft.jobId)) return;
       draft = await this.worker.request('draft-quotes:process-next', { jobId: draft.jobId });
       if (draft.state === 'failed') throw new Error(draft.error || draft.message || '自动对白草稿扫描失败');
       if (draft.state === 'cancelled') throw new Error('自动对白草稿子任务已取消');
@@ -543,7 +565,7 @@ export class FoundationWorkflowRunner {
       output: { selectionRunId: selection.id, eventRunId, childJobId, reviewBoundary: 'events-and-details-remain-pending' },
     });
     if (job.state === 'completed') return;
-    this.timelineEventRunner.start(childJobId);
+    this.timelineEventRunner.start(childJobId, workflow.id);
     await this.waitForChildJob(workflow.id, 'event_drafts', childJobId, '事件草稿', {
       selectionRunId: selection.id, eventRunId, childJobId, reviewBoundary: 'events-and-details-remain-pending',
     });
@@ -594,7 +616,7 @@ export class FoundationWorkflowRunner {
     }
     if (!childJobId || !job) {
       const started = await this.worker.request('relationships:draft-scan-create', {
-        selectionRunId: selection.id, extractorVersion: 'relationship-draft-local.v1',
+        selectionRunId: selection.id, extractorVersion: 'relationship-draft-local.v2',
       });
       childJobId = started.jobId;
       job = (await this.worker.request('jobs:list', undefined)).find((item) => item.id === childJobId);
@@ -622,6 +644,7 @@ export class FoundationWorkflowRunner {
     while (true) {
       const current = await this.worker.request('workflows:foundation-get', { runId });
       if (current.state !== 'running') return;
+      if (await this.pauseNearBudget(current, childJobId)) return;
       const job = (await this.worker.request('jobs:list', undefined)).find((item) => item.id === childJobId);
       if (!job) throw new Error(`${label}子任务已经丢失`);
       if (job.state === 'completed') {

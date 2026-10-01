@@ -338,6 +338,7 @@ export type FoundationWorkflowRunRecord = {
   revisionId: string;
   profile: string;
   model: string;
+  tokenBudget: number | null;
   inputHash: string;
   state: JobRecord['state'];
   currentStepKey: FoundationWorkflowStepKey | null;
@@ -355,6 +356,21 @@ export type FoundationWorkflowStart = {
   jobId: string;
   state: JobRecord['state'];
   reused: boolean;
+};
+
+export type FoundationUsageSummary = {
+  inputTokens: number;
+  outputTokens: number;
+  cacheHitTokens: number;
+  cacheMissTokens: number;
+  attempts: number;
+  localCacheHits: number;
+  failedAttempts: number;
+  unreportedAttempts: number;
+  stages: Record<string, {
+    inputTokens: number; outputTokens: number; cacheHitTokens: number; cacheMissTokens: number;
+    attempts: number; localCacheHits: number; failedAttempts: number; unreportedAttempts: number;
+  }>;
 };
 
 export type AutomationDraftSelectionReasonCode =
@@ -2365,9 +2381,10 @@ export type WorkerRequestMap = {
   'source-spans:inspect': { sourceSpanId: string };
   'jobs:list': undefined;
   'jobs:control': { jobId: string; action: 'pause' | 'resume' | 'cancel' | 'retry' };
-  'workflows:foundation-create': { model: string; profile: string };
+  'workflows:foundation-create': { model: string; profile: string; tokenBudget?: number | null };
   'workflows:foundation-list': undefined;
   'workflows:foundation-get': { runId: string };
+  'workflows:foundation-budget': { runId: string; tokenBudget: number | null };
   'workflows:foundation-step': {
     runId: string;
     stepKey: FoundationWorkflowStepKey;
@@ -2577,6 +2594,7 @@ export type WorkerResponseMap = {
   'workflows:foundation-create': FoundationWorkflowStart;
   'workflows:foundation-list': FoundationWorkflowRunRecord[];
   'workflows:foundation-get': FoundationWorkflowRunRecord;
+  'workflows:foundation-budget': FoundationWorkflowRunRecord;
   'workflows:foundation-step': FoundationWorkflowRunRecord;
   'workflows:foundation-fail': FoundationWorkflowRunRecord;
   'workflows:foundation-control': FoundationWorkflowRunRecord;
@@ -2759,7 +2777,7 @@ export type AppApi = {
   listProjectLibrary(): Promise<ProjectSummary[]>;
   inspectProjectBundle(id: string): Promise<ProjectBundleAvailability>;
   listProjectPlayEntries(id: string): Promise<import('./play-session-options').PlayableEntryChoice[]>;
-  prepareProjectPlay(id: string, entryEventId?: string): Promise<import('./play-session-options').PlaySessionPreview>;
+  prepareProjectPlay(id: string, entryEventId?: string, options?: import('./play-session-options').PlaySessionOptions): Promise<import('./play-session-options').PlaySessionPreview>;
   launchProjectPlay(id: string, options: import('./play-session-options').PlaySessionOptions, settingsPage?: 'model' | 'tuning' | 'other'): Promise<SillyTavernStatus>;
   openRecentProject(id: string): Promise<ProjectSummary>;
   getProject(): Promise<ProjectSummary | null>;
@@ -2785,8 +2803,10 @@ export type AppApi = {
   inspectSourceSpan(sourceSpanId: string): Promise<SourceSpanInspection>;
   listJobs(): Promise<JobRecord[]>;
   controlJob(jobId: string, action: 'pause' | 'resume' | 'cancel' | 'retry'): Promise<JobRecord[]>;
-  startFoundationWorkflow(options: { model: string; profile?: string }): Promise<FoundationWorkflowStart>;
+  startFoundationWorkflow(options: { model: string; profile?: string; tokenBudget?: number | null }): Promise<FoundationWorkflowStart>;
   listFoundationWorkflows(): Promise<FoundationWorkflowRunRecord[]>;
+  getFoundationUsage(runId: string): Promise<FoundationUsageSummary>;
+  updateFoundationTokenBudget(runId: string, tokenBudget: number | null): Promise<FoundationWorkflowRunRecord>;
   controlFoundationWorkflow(runId: string, action: FoundationWorkflowControlAction): Promise<FoundationWorkflowRunRecord>;
   createBackup(): Promise<{ outputPath: string; checksum: string } | null>;
   restoreBackup(): Promise<ProjectSummary | null>;

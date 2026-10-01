@@ -40,7 +40,9 @@ export async function withIsolatedSillyTavern<T>(
     // A cold start is slower but remains valid when no reusable webpack cache exists.
   }
   const configPath = path.join(dataRoot, 'isolated-config.yaml');
-  const isolatedConfig = (await fs.readFile(path.join(sourceRoot, 'config.yaml'), 'utf8'))
+  const configSource = path.join(sourceRoot, 'config.yaml');
+  const isolatedConfig = (await fs.readFile(await fs.access(configSource).then(() => configSource)
+    .catch(() => path.join(sourceRoot, 'default', 'config.yaml')), 'utf8'))
     .replace('skipContentCheck: false', 'skipContentCheck: true');
   await fs.writeFile(configPath, isolatedConfig, 'utf8');
 

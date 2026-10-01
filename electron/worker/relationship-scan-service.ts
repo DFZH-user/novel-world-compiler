@@ -122,13 +122,13 @@ export class RelationshipScanService {
     extractorVersionInput: string,
     modeInput: 'local' | 'model' = 'local',
     modelInput = '',
-    promptVersionInput = 'relationship-local.v1',
+    promptVersionInput = 'relationship-local.v2',
   ): CharacterScanStart {
     return this.createRunInternal(extractorVersionInput, modeInput, modelInput, promptVersionInput, null);
   }
 
   createDraftRun(selectionRunId: string, extractorVersionInput: string): CharacterScanStart {
-    return this.createRunInternal(extractorVersionInput, 'local', '', 'relationship-draft-local.v1', selectionRunId);
+    return this.createRunInternal(extractorVersionInput, 'local', '', 'relationship-draft-local.v2', selectionRunId);
   }
 
   private createRunInternal(

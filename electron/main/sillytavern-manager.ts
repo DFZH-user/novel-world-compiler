@@ -174,7 +174,12 @@ export class SillyTavernManager {
         await fsp.cp(seedRoot, dataRoot, { recursive: true, force: false });
       }
       await Promise.all([fsp.mkdir(dataRoot, { recursive: true }), fsp.mkdir(runtimeDataRoot, { recursive: true })]);
-      if (!fs.existsSync(configPath)) await fsp.copyFile(path.join(runtimeRoot, 'config.yaml'), configPath);
+      if (!fs.existsSync(configPath)) {
+        const packagedConfig = path.join(runtimeRoot, 'config.yaml');
+        const defaultConfig = path.join(runtimeRoot, 'default', 'config.yaml');
+        const template = fs.existsSync(packagedConfig) ? packagedConfig : defaultConfig;
+        await fsp.copyFile(template, configPath);
+      }
       const port = await findFreePort();
       const baseUrl = `http://127.0.0.1:${port}`;
       const child = spawn(process.execPath, [

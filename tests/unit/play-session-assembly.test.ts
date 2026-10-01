@@ -57,4 +57,33 @@ describe('offline play session assembly', () => {
     places.extensions.novel_world_compiler.revision_id = 'revision-old';
     expect(() => buildSessionAssemblyPlan(manifest, relationships, places)).toThrow('不能装配');
   });
+
+  it('omits redundant community summaries and merges identical relationship evidence only in the session', () => {
+    const { manifest, relationships, places } = sources();
+    const base = relationships.entries['0'];
+    const relation = { ...base, key: ['甲', '乙', '朋友'], content: '甲与乙是朋友。',
+      extensions: { novel_world_compiler: { entry_kind: 'relationship' as const,
+        source_relationship_ids: ['r1'], source_evidence_ids: ['e1'] } } };
+    relationships.entries = {
+      '0': { ...base, key: ['甲', '乙'], content: '甲和乙所在的关系社区。',
+        extensions: { novel_world_compiler: { entry_kind: 'community',
+          source_relationship_ids: ['r1'], source_evidence_ids: ['e1'] } } } as SillyTavernWorldInfoEntry,
+      '1': relation,
+      '2': { ...relation, extensions: { novel_world_compiler: { entry_kind: 'relationship',
+        source_relationship_ids: ['r2'], source_evidence_ids: ['e2'] } } },
+      '3': { ...relation, content: '甲与乙也有一段争执。', extensions: { novel_world_compiler: { entry_kind: 'relationship',
+        source_relationship_ids: ['r3'], source_evidence_ids: ['e3'] } } },
+    } as SillyTavernWorldInfoExport['entries'];
+    const original = structuredClone(relationships);
+    const plan = buildSessionAssemblyPlan(manifest, relationships, places);
+    const entries = Object.values(plan.sessionWorldBook.entries);
+    expect(entries).toHaveLength(3); // two distinct relations and one place
+    expect(entries[0].key).toEqual(['甲']);
+    expect(entries[0].keysecondary).toEqual(['乙']);
+    expect(entries[0].selective).toBe(true);
+    expect((entries[0] as SillyTavernWorldInfoEntry).extensions.novel_world_compiler.source_relationship_ids).toEqual(['r1', 'r2']);
+    expect((entries[0] as SillyTavernWorldInfoEntry).extensions.novel_world_compiler.source_evidence_ids).toEqual(['e1', 'e2']);
+    expect(entries[1].content).toContain('争执');
+    expect(relationships).toEqual(original);
+  });
 });

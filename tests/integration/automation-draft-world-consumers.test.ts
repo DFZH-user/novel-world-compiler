@@ -123,7 +123,7 @@ describe('Batch 4 automation draft world consumers', () => {
     try {
       const scans = new RelationshipScanService(store);
       expect(() => scans.createRun('ordinary-local.v1')).toThrow('已确认人物');
-      const started = scans.createDraftRun(selectionId, 'relationship-draft-local.v1');
+      const started = scans.createDraftRun(selectionId, 'relationship-draft-local.v2');
       const work = scans.nextChunk(started.jobId)!;
       expect(work).toMatchObject({ inputMode: 'automation-draft-selection', draftSelectionRunId: selectionId });
       expect(new Set(work.characters.map((character) => character.identityId))).toEqual(new Set(selectedIds));
@@ -135,7 +135,7 @@ describe('Batch 4 automation draft world consumers', () => {
       const candidates = new RelationshipService(store).listCandidates();
       expect(candidates.length).toBe(output.candidates.length);
       expect(candidates.every((candidate) => candidate.reviewStatus === 'pending')).toBe(true);
-      expect(scans.createDraftRun(selectionId, 'relationship-draft-local.v1')).toMatchObject({ jobId: started.jobId, runId: started.runId, reused: true, state: 'completed' });
+      expect(scans.createDraftRun(selectionId, 'relationship-draft-local.v2')).toMatchObject({ jobId: started.jobId, runId: started.runId, reused: true, state: 'completed' });
       expect(store.get().db.prepare('SELECT input_mode AS inputMode, draft_selection_run_id AS selectionRunId FROM relationship_scan_runs WHERE id = ?')
         .get(started.runId)).toMatchObject({ inputMode: 'automation-draft-selection', selectionRunId: selectionId });
     } finally {

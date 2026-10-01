@@ -8,6 +8,7 @@ import type {
 } from '../../src/shared/contracts';
 import type { ProjectStore } from './project-store';
 import type { SQLiteDatabase } from './sqlite-db';
+import { normalizeFoundationProfile } from '../../src/shared/foundation-profile';
 
 const stepDefinitions: Array<{ key: FoundationWorkflowStepKey; label: string }> = [
   { key: 'preflight', label: '工程预检' },
@@ -36,10 +37,14 @@ function hash(value: string): string {
 export class FoundationWorkflowService {
   constructor(private readonly store: ProjectStore) {}
 
-  create(modelInput: string, profileInput = 'foundation-v1'): FoundationWorkflowStart {
+  create(modelInput: string, profileInput = 'foundation-v1', tokenBudgetInput?: number | null): FoundationWorkflowStart {
     const { db, projectId } = this.store.get();
     const model = modelInput.trim();
-    const profile = profileInput.trim() || 'foundation-v1';
+    const profile = normalizeFoundationProfile(profileInput.trim() || 'medium');
+    const tokenBudget = tokenBudgetInput == null ? null : Number(tokenBudgetInput);
+    if (tokenBudget !== null && (!Number.isSafeInteger(tokenBudget) || tokenBudget < 1000 || tokenBudget > 1_000_000_000)) {
+      throw new Error('Token 上限须为 1000 至 10 亿之间的整数');
+    }
     if (!model) throw new Error('请先配置并选择人物普查模型');
     const revision = db.prepare('SELECT active_revision_id AS revisionId FROM projects WHERE id = ?')
       .get(projectId) as { revisionId: string | null } | undefined;
@@ -74,7 +79,7 @@ export class FoundationWorkflowService {
         .run(
           jobId,
           projectId,
-          JSON.stringify({ runId, revisionId: revision.revisionId, profile, model }),
+           JSON.stringify({ runId, revisionId: revision.revisionId, profile, model, tokenBudget }),
           inputHash,
           JSON.stringify({ runId, stepKey: null }),
           new Date(Date.now() + 60_000).toISOString(),
@@ -109,6 +114,20 @@ export class FoundationWorkflowService {
       .get(runId, projectId) as RunRow | undefined;
     if (!row) throw new Error('找不到一键基础流程');
     return { ...row, progress: Number(row.progress), steps: this.steps(db, row.id) };
+  }
+
+  updateBudget(runId: string, tokenBudgetInput: number | null): FoundationWorkflowRunRecord {
+    const { db, projectId } = this.store.get();
+    const tokenBudget = tokenBudgetInput == null ? null : Number(tokenBudgetInput);
+    if (tokenBudget !== null && (!Number.isSafeInteger(tokenBudget) || tokenBudget < 1000 || tokenBudget > 1_000_000_000)) {
+      throw new Error('Token 上限须为 1000 至 10 亿之间的整数');
+    }
+    const run = db.prepare('SELECT job_id AS jobId FROM foundation_workflow_runs WHERE id = ? AND project_id = ?')
+      .get(runId, projectId) as { jobId: string } | undefined;
+    if (!run) throw new Error('找不到一键基础流程');
+    db.prepare("UPDATE jobs SET input_json = json_set(CASE WHEN json_valid(input_json) THEN input_json ELSE '{}' END, '$.tokenBudget', ?) WHERE id = ?")
+      .run(tokenBudget, run.jobId);
+    return this.get(runId);
   }
 
   updateStep(
@@ -272,6 +291,7 @@ export class FoundationWorkflowService {
 
   private runSelect(): string {
     return `SELECT r.id, r.job_id AS jobId, r.revision_id AS revisionId, r.profile, r.model,
+       CASE WHEN json_valid(j.input_json) THEN json_extract(j.input_json, '$.tokenBudget') ELSE NULL END AS tokenBudget,
       r.input_hash AS inputHash, r.state, r.current_step_key AS currentStepKey,
       r.total_steps AS totalSteps, r.completed_steps AS completedSteps,
       j.progress, r.message, r.created_at AS createdAt, r.updated_at AS updatedAt

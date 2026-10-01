@@ -3,6 +3,22 @@ import { compactRuntimeCharacter } from '../../src/shared/runtime-character';
 import type { TavernCardV2 } from '../../src/shared/contracts';
 
 describe('offline runtime character', () => {
+  it('increases complete-statement detail from low to high without editing source', () => {
+    const lines = Array.from({ length: 70 }, (_, index) => `经历${index}：在当时完成了一件有记录的事。`).join('\n');
+    const source = { spec: 'chara_card_v2', spec_version: '2.0', data: {
+      name: '甲', description: lines, personality: '', scenario: '', mes_example: '',
+      system_prompt: '', post_history_instructions: '', first_mes: '', creator_notes: '',
+      alternate_greetings: [], tags: [], creator: '', character_version: '1', extensions: {},
+    } } as TavernCardV2;
+    const before = structuredClone(source);
+    const low = compactRuntimeCharacter('person-1', source, 'low');
+    const medium = compactRuntimeCharacter('person-1', source, 'medium');
+    const high = compactRuntimeCharacter('person-1', source, 'high');
+    expect(low.runtimeChars).toBeLessThan(medium.runtimeChars);
+    expect(medium.runtimeChars).toBeLessThan(high.runtimeChars);
+    expect(low.details.length).toBeGreaterThan(medium.details.length);
+    expect(source).toEqual(before);
+  });
   it('retains complete statements and uncertainty across categories without modifying the archive', () => {
     const source = { spec: 'chara_card_v2', spec_version: '2.0', data: {
       name: '方源', description: '{{char}}是人物。\n【能力】\n' + '能力说明。'.repeat(500) + '\n【身份】\n身份：旅人\n【状态】\n持有物：尚不确定（甲 / 乙）',

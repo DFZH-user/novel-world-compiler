@@ -53,8 +53,8 @@ function clip(value: string, limit: number): string {
   return normalized.length <= limit ? normalized : `${normalized.slice(0, limit)}\n……（已按运行时预算截断）`;
 }
 function factLine(value: StoryStateValueRecord): string {
-  if (value.value) return `[角色已知] ${value.predicate}：${value.value}`;
-  return `[角色存疑] ${value.predicate}：可能为 ${value.alternatives.join(' / ')}`;
+  if (value.value) return `[当前公开资料，角色是否知晓待核对] ${value.predicate}：${value.value}`;
+  return `[当前存疑资料，角色是否知晓待核对] ${value.predicate}：可能为 ${value.alternatives.join(' / ')}`;
 }
 function claimRules(values: StoryStateValueRecord[], future: FutureFactRow[]): OutputClaimRule[] {
   const rules: OutputClaimRule[] = [];

@@ -1,4 +1,5 @@
 import type { TavernCardV2 } from './contracts';
+import { playProfileSettings, type PlayProfile } from './play-profile';
 
 export type RuntimeCharacterDetail = { topic: string; content: string };
 /** Keep whole claims, including ambiguity alternatives; topics only control retrieval. */
@@ -65,12 +66,13 @@ function selectStatements(text: string, budget: number): { text: string; omitted
   return { text: result.join('\n'), omitted: seen.size - kept };
 }
 
-export function compactRuntimeCharacter(identityId: string, source: TavernCardV2): RuntimeCharacter {
+export function compactRuntimeCharacter(identityId: string, source: TavernCardV2, profile: PlayProfile = 'medium'): RuntimeCharacter {
+  const settings = playProfileSettings(profile);
   const characterText = (text: string) => text.replace(/\{\{char\}\}/giu, source.data.name);
-  const description = selectStatements(characterText(source.data.description), 1600);
-  const personality = selectStatements(characterText(source.data.personality), 1100);
-  const examples = selectStatements(characterText(source.data.mes_example), 500);
-  const scenario = selectStatements(characterText(source.data.scenario), 500);
+  const description = selectStatements(characterText(source.data.description), settings.descriptionChars);
+  const personality = selectStatements(characterText(source.data.personality), settings.personalityChars);
+  const examples = selectStatements(characterText(source.data.mes_example), settings.exampleChars);
+  const scenario = selectStatements(characterText(source.data.scenario), settings.scenarioChars);
   const card: TavernCardV2 = {
     ...source,
     data: {
@@ -86,7 +88,7 @@ export function compactRuntimeCharacter(identityId: string, source: TavernCardV2
       alternate_greetings: [],
       creator_notes: '离线派生的精简运行卡。完整资料和原文证据保留在工程中；按完整语句选取资料，未选入的内容不等于不存在。',
       character_version: 'runtime-character.v1',
-      extensions: { ...source.data.extensions, novel_world_runtime: { identity_id: identityId, policy: 'complete-statements.v1' } },
+       extensions: { ...source.data.extensions, novel_world_runtime: { identity_id: identityId, policy: 'complete-statements.v2', play_profile: profile } },
     },
   };
   const fields = (value: TavernCardV2) => [value.data.description, value.data.personality, value.data.scenario,

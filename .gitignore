@@ -23,6 +23,7 @@ api-config.json
 *.pem
 *.key
 .codex*/
+.portable-smoke/
 项目/
 发布/
 verification-results/

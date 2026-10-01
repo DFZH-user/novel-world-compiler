@@ -241,12 +241,17 @@ async function dispatch<C extends WorkerChannel>(channel: C, rawPayload: WorkerR
     }
     case 'workflows:foundation-create': {
       const value = payload as WorkerRequestMap['workflows:foundation-create'];
-      result = foundationWorkflows.create(value.model, value.profile);
+      result = foundationWorkflows.create(value.model, value.profile, value.tokenBudget);
       break;
     }
     case 'workflows:foundation-list': result = foundationWorkflows.list(); break;
     case 'workflows:foundation-get': {
       result = foundationWorkflows.get((payload as WorkerRequestMap['workflows:foundation-get']).runId);
+      break;
+    }
+    case 'workflows:foundation-budget': {
+      const value = payload as WorkerRequestMap['workflows:foundation-budget'];
+      result = foundationWorkflows.updateBudget(value.runId, value.tokenBudget);
       break;
     }
     case 'workflows:foundation-step': {

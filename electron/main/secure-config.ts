@@ -7,11 +7,13 @@ import { z } from 'zod';
 import { buildJsonCompletionAttempts, buildTextCompletionAttempts, shouldRetryWithoutOptionalJsonMode } from './model-request-policy';
 import { decodeCompletionJson } from './completion-json';
 import type { ApiStatus } from '../../src/shared/contracts';
+import { isSafeApiBaseUrl } from '../../src/shared/api-base-url';
+import { recordTokenUsageAttempt, type TokenUsageAttempt } from './token-usage-ledger';
 
 const apiInputSchema = z.object({
   requestSettings: apiRequestSettingsSchema.optional(),
   provider: z.string().trim().min(1).max(50),
-  baseUrl: z.string().url().refine((url) => url.startsWith('https://') || /localhost|127\.0\.0\.1/.test(url), {
+  baseUrl: z.string().url().refine(isSafeApiBaseUrl, {
     message: '远程 API 必须使用 HTTPS',
   }),
   apiKey: z.string().trim().max(500).optional(),
@@ -36,8 +38,40 @@ const completionResponseSchema = z.object({
   usage: z.object({
     prompt_tokens: z.number().int().nonnegative().optional(),
     completion_tokens: z.number().int().nonnegative().optional(),
+    prompt_cache_hit_tokens: z.number().int().nonnegative().optional(),
+    prompt_cache_miss_tokens: z.number().int().nonnegative().optional(),
+    prompt_tokens_details: z.object({ cached_tokens: z.number().int().nonnegative().optional() }).optional(),
   }).optional(),
 });
+
+function reportedUsage(body: string): Pick<TokenUsageAttempt, 'inputTokens' | 'outputTokens' | 'cacheHitTokens' | 'cacheMissTokens'> {
+  try {
+    const parsed = z.object({ usage: completionResponseSchema.shape.usage }).parse(JSON.parse(body));
+    return {
+      inputTokens: parsed.usage?.prompt_tokens ?? null,
+      outputTokens: parsed.usage?.completion_tokens ?? null,
+      cacheHitTokens: parsed.usage?.prompt_cache_hit_tokens ?? parsed.usage?.prompt_tokens_details?.cached_tokens ?? null,
+      cacheMissTokens: parsed.usage?.prompt_cache_miss_tokens ?? null,
+    };
+  } catch {
+    return { inputTokens: null, outputTokens: null, cacheHitTokens: null, cacheMissTokens: null };
+  }
+}
+
+async function recordCompletionAttempt(
+  input: { model: string; usageContext?: { jobId: string; stage: string; runId?: string } },
+  requestKind: TokenUsageAttempt['requestKind'], attempt: number, httpStatus: number | null,
+  outcome: TokenUsageAttempt['outcome'], body: string,
+): Promise<void> {
+  await recordTokenUsageAttempt({
+    runId: input.usageContext?.runId ?? null,
+    jobId: input.usageContext?.jobId ?? null,
+    stage: input.usageContext?.stage ?? 'unattributed',
+    model: input.model,
+    requestKind, attempt, httpStatus, outcome,
+    ...reportedUsage(body),
+  });
+}
 
 const modelListResponseSchema = z.object({
   data: z.array(z.object({ id: z.string().trim().min(1) })),
@@ -132,6 +166,7 @@ export async function requestJsonCompletion(input: {
   system: string;
   user: string;
   maxTokens?: number;
+  usageContext?: { jobId: string; stage: string; runId?: string };
 }): Promise<{ parsed: unknown; rawJson: string; inputTokens: number; outputTokens: number }> {
   const stored = await readStored();
   if (!stored) throw new Error('尚未保存 API 配置，请先到“API 设置”完成配置');
@@ -141,8 +176,9 @@ export async function requestJsonCompletion(input: {
   const attempts = buildJsonCompletionAttempts({ ...input, model: resolveModelId(stored.baseUrl, input.model), settings });
   let body = '';
   let response: Response | null = null;
+  let successfulAttempt = 0;
   for (let index = 0; index < attempts.length; index += 1) {
-    response = await fetch(`${stored.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+    try { response = await fetch(`${stored.baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: {
         Authorization: `Bearer ${key}`,
@@ -150,28 +186,32 @@ export async function requestJsonCompletion(input: {
       },
       body: JSON.stringify(attempts[index]),
       signal: AbortSignal.timeout(settings.timeoutSeconds * 1000),
-    });
-    body = await response.text();
-    if (response.ok) break;
+    }); body = await response.text(); } catch (error) {
+      await recordCompletionAttempt(input, 'json', index + 1, null, 'network_error', '');
+      throw error;
+    }
+    if (response.ok) { successfulAttempt = index + 1; break; }
+    await recordCompletionAttempt(input, 'json', index + 1, response.status, 'http_error', body);
     const hasFallback = index + 1 < attempts.length;
     if (!hasFallback || !shouldRetryWithoutOptionalJsonMode(response.status, body)) {
       throw new Error(`模型服务器返回 ${response.status}：${body.slice(0, 500)}`);
     }
   }
   if (!response?.ok) throw new Error('模型服务器没有返回可用响应');
-  const completion = completionResponseSchema.parse(JSON.parse(body));
-  const { parsed, rawJson } = decodeCompletionJson({
-    content: completion.choices[0].message.content,
-    finishReason: completion.choices[0].finish_reason,
-    outputTokens: completion.usage?.completion_tokens,
-    maxTokens: attempts[0].max_tokens,
-  });
-  return {
-    parsed,
-    rawJson,
-    inputTokens: completion.usage?.prompt_tokens ?? 0,
-    outputTokens: completion.usage?.completion_tokens ?? 0,
-  };
+  try {
+    const completion = completionResponseSchema.parse(JSON.parse(body));
+    const { parsed, rawJson } = decodeCompletionJson({
+      content: completion.choices[0].message.content,
+      finishReason: completion.choices[0].finish_reason,
+      outputTokens: completion.usage?.completion_tokens,
+      maxTokens: attempts[successfulAttempt - 1].max_tokens,
+    });
+    await recordCompletionAttempt(input, 'json', successfulAttempt, response.status, 'completed', body);
+    return { parsed, rawJson, inputTokens: completion.usage?.prompt_tokens ?? 0, outputTokens: completion.usage?.completion_tokens ?? 0 };
+  } catch (error) {
+    await recordCompletionAttempt(input, 'json', successfulAttempt, response.status, 'invalid_response', body);
+    throw error;
+  }
 }
 
 export async function requestTextCompletion(input: {
@@ -179,35 +219,42 @@ export async function requestTextCompletion(input: {
   system: string;
   user: string;
   maxTokens?: number;
+  usageContext?: { jobId: string; stage: string; runId?: string };
 }): Promise<{ content: string; inputTokens: number; outputTokens: number }> {
   const stored = await readStored();
   if (!stored) throw new Error('尚未保存 API 配置，请先到“API 设置”完成配置');
   if (!safeStorage.isEncryptionAvailable()) throw new Error('系统安全存储当前不可用');
   const key = safeStorage.decryptString(Buffer.from(stored.encryptedKey, 'base64'));
   const settings = apiRequestSettingsSchema.parse(stored.requestSettings ?? {});
-  const attempts = buildTextCompletionAttempts({ ...input, model: resolveModelId(stored.baseUrl, input.model), maxTokens: settings.textMaxTokens, settings });
+  const attempts = buildTextCompletionAttempts({ ...input, model: resolveModelId(stored.baseUrl, input.model), maxTokens: input.maxTokens ?? settings.textMaxTokens, settings });
   let body = '';
   let response: Response | null = null;
+  let successfulAttempt = 0;
   for (let index = 0; index < attempts.length; index += 1) {
-    response = await fetch(`${stored.baseUrl.replace(/\/$/, '')}/chat/completions`, {
+    try { response = await fetch(`${stored.baseUrl.replace(/\/$/, '')}/chat/completions`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
       body: JSON.stringify(attempts[index]),
       signal: AbortSignal.timeout(settings.timeoutSeconds * 1000),
-    });
-    body = await response.text();
-    if (response.ok) break;
+    }); body = await response.text(); } catch (error) {
+      await recordCompletionAttempt(input, 'text', index + 1, null, 'network_error', '');
+      throw error;
+    }
+    if (response.ok) { successfulAttempt = index + 1; break; }
+    await recordCompletionAttempt(input, 'text', index + 1, response.status, 'http_error', body);
     if (index + 1 >= attempts.length || !shouldRetryWithoutOptionalJsonMode(response.status, body)) {
       throw new Error(`模型服务器返回 ${response.status}：${body.slice(0, 500)}`);
     }
   }
   if (!response?.ok) throw new Error('模型服务器没有返回可用响应');
-  const completion = completionResponseSchema.parse(JSON.parse(body));
-  const content = completion.choices[0].message.content?.trim();
-  if (!content) throw new Error('模型返回了空内容');
-  return {
-    content,
-    inputTokens: completion.usage?.prompt_tokens ?? 0,
-    outputTokens: completion.usage?.completion_tokens ?? 0,
-  };
+  try {
+    const completion = completionResponseSchema.parse(JSON.parse(body));
+    const content = completion.choices[0].message.content?.trim();
+    if (!content) throw new Error('模型返回了空内容');
+    await recordCompletionAttempt(input, 'text', successfulAttempt, response.status, 'completed', body);
+    return { content, inputTokens: completion.usage?.prompt_tokens ?? 0, outputTokens: completion.usage?.completion_tokens ?? 0 };
+  } catch (error) {
+    await recordCompletionAttempt(input, 'text', successfulAttempt, response.status, 'invalid_response', body);
+    throw error;
+  }
 }

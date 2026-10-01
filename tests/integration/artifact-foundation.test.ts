@@ -197,7 +197,7 @@ describe('artifact foundation workbench', () => {
         identityId: identity.id, identityName: '陆沉', entryEventId: 'entry-event',
         model: 'deepseek-v4-flash', promptVersion: 'character-runtime.v1',
       });
-      expect(runtimeWork.userPrompt).toContain('[角色已知] 身份：青石镇巡夜人');
+      expect(runtimeWork.userPrompt).toContain('[当前公开资料，角色是否知晓待核对] 身份：青石镇巡夜人');
       expect(runtimeWork.systemPrompt).toContain('【小说世界编译器·角色认知边界】');
       expect(runtimeWork.claimRules).toContainEqual(expect.objectContaining({
         stance: 'known', surfaceForms: ['青石镇巡夜人'],
@@ -363,15 +363,31 @@ describe('artifact foundation workbench', () => {
       expect(assembly.resourceKey).toContain(firstBundle.bundleFingerprint);
       expect(assembly.narratorCard.data.character_book).toBeUndefined();
       expect(Object.keys(assembly.sessionWorldBook.entries)).toHaveLength(
-        Object.keys(relationshipWorldInfo.entries).length + Object.keys(places.entries).length,
+        Object.values(relationshipWorldInfo.entries).filter(entry =>
+          entry.extensions.novel_world_compiler.entry_kind !== 'community').length
+          + Object.keys(places.entries).length,
       );
       expect(assembly.sessionWorldBook.token_budget).toBeLessThanOrEqual(2048);
+      for (const entry of Object.values(assembly.sessionWorldBook.entries)) {
+        if (!('extensions' in entry) || entry.extensions.novel_world_compiler.entry_kind !== 'relationship') continue;
+        expect(entry.selective).toBe(true);
+        expect(entry.key).toHaveLength(1);
+        expect(entry.keysecondary).toHaveLength(1);
+      }
       const prepared = await new PlaySessionPreparationService(bundleValidation).prepare(firstBundle.packageDirectory);
       expect(prepared.resourceKey).toContain(`${assembly.resourceKey}:runtime-v1:`);
-      expect(prepared.options).toEqual({ mode: 'narrator', persona: { name: '旅人', description: '' } });
+      expect(prepared.options).toEqual({ mode: 'narrator', playProfile: 'medium', persona: { name: '旅人', description: '' } });
       expect(prepared.narratorCard.data.character_book).toBeUndefined();
       expect(prepared.preview?.characters).toHaveLength(1);
-      expect(prepared.sessionWorldBook.token_budget).toBeLessThanOrEqual(2048);
+      expect(prepared.sessionWorldBook.token_budget).toBeLessThanOrEqual(1024);
+      const preparation = new PlaySessionPreparationService(bundleValidation);
+      const low = await preparation.prepare(firstBundle.packageDirectory, { mode: 'narrator', playProfile: 'low', persona: { name: '旅人', description: '' } });
+      const high = await preparation.prepare(firstBundle.packageDirectory, { mode: 'narrator', playProfile: 'high', persona: { name: '旅人', description: '' } });
+      expect(low.sessionWorldBook.token_budget).toBe(512);
+      expect(high.sessionWorldBook.token_budget).toBe(2048);
+      expect(low.resourceKey).not.toBe(high.resourceKey);
+      expect(low.preview?.playProfile).toBe('low');
+      expect(high.preview?.playProfile).toBe('high');
       for (const [key, entry] of Object.entries(assembly.sessionWorldBook.entries)) {
         expect(prepared.sessionWorldBook.entries[key].content).toBe(entry.content);
       }

@@ -15,9 +15,9 @@ export function PlaySessionSetup({ projectId, onBack, onStarted }: {
   const [entryFilter, setEntryFilter] = useState('');
   const [options, setOptions] = useState<PlaySessionOptions>(() => {
     try { const value = JSON.parse(localStorage.getItem(`nw-play-${projectId}`) || 'null');
-      if (value?.persona && ['narrator', 'character'].includes(value.mode)) return value;
+      if (value?.persona && ['narrator', 'character'].includes(value.mode)) return { ...value, playProfile: ['low', 'medium', 'high'].includes(value.playProfile) ? value.playProfile : 'medium' };
     } catch { /* use empty identity */ }
-    return { mode: 'narrator', persona: { name: '', description: '' } };
+    return { mode: 'narrator', playProfile: 'medium', persona: { name: '', description: '' } };
   });
   useEffect(() => {
     let active = true;
@@ -34,7 +34,11 @@ export function PlaySessionSetup({ projectId, onBack, onStarted }: {
   useEffect(() => {
     let active = true;
     setPreview(null);
-    window.novelCompiler.prepareProjectPlay(projectId, options.entryEventId).then(value => {
+    const previewOptions: PlaySessionOptions = {
+      mode: 'narrator', entryEventId: options.entryEventId, startingPlaceId: options.startingPlaceId,
+      playProfile: options.playProfile ?? 'medium', persona: { name: '旅人', description: '' },
+    };
+    window.novelCompiler.prepareProjectPlay(projectId, options.entryEventId, previewOptions).then(value => {
       if (!active) return;
       setPreview(value); setError('');
       setOptions(current => ({
@@ -46,9 +50,12 @@ export function PlaySessionSetup({ projectId, onBack, onStarted }: {
         persona: current.persona.identityId && !value.characters.some(character => character.identityId === current.persona.identityId)
           ? { name: '', description: '' } : current.persona,
       }));
-    }).catch(reason => { if (active) setError(reason instanceof Error ? reason.message : String(reason)); });
+    }).catch(reason => { if (!active) return;
+      if (options.startingPlaceId) setOptions(current => ({ ...current, startingPlaceId: undefined }));
+      else setError(reason instanceof Error ? reason.message : String(reason));
+    });
     return () => { active = false; };
-  }, [projectId, options.entryEventId]);
+  }, [projectId, options.entryEventId, options.startingPlaceId, options.playProfile]);
   const ai = preview?.characters.find(character => character.identityId === options.characterId);
   const player = preview?.characters.find(character => character.identityId === options.persona.identityId);
   const conflict = options.mode === 'character' && ai && (ai.identityId === player?.identityId || ai.name === options.persona.name.trim());
@@ -88,21 +95,25 @@ export function PlaySessionSetup({ projectId, onBack, onStarted }: {
       <div className="play-setup-grid">
         <section><small>01 · AI 扮演／角色卡</small><h2>由谁陪你进入故事</h2>
           <label>游玩模式<select disabled={busy} value={options.mode} onChange={event => setOptions({ ...options, mode: event.target.value as PlaySessionOptions['mode'] })}><option value="narrator">世界冒险 · 旁白主持</option><option value="character">指定人物互动</option></select></label>
+          <label>游玩资料档位<select disabled={busy} value={options.playProfile ?? 'medium'} onChange={event => setOptions({ ...options, playProfile: event.target.value as 'low' | 'medium' | 'high' })}><option value="low">低 · 精简省空间</option><option value="medium">中 · 均衡（默认）</option><option value="high">高 · 更多已知细节</option></select></label>
           {options.mode === 'character' ? <label>AI 扮演的人物<select disabled={busy} value={options.characterId ?? ''} onChange={event => setOptions({ ...options, characterId: event.target.value })}><option value="">选择本书人物</option>{preview.characters.map(character => <option key={character.identityId} value={character.identityId}>{character.name}</option>)}</select></label> : <p>旁白描写世界与在场人物，你决定自己的行动、台词和心理。</p>}
-          <small>常驻资料：{options.mode === 'character' ? ai?.runtimeChars ?? '—' : preview.narratorChars} 字符。字符数不等于模型 Token 数。</small>
+           <small>常驻资料：{options.mode === 'character' ? ai?.runtimeChars ?? '—' : preview.narratorChars} 字符，约 {options.mode === 'character' ? ai?.runtimeEstimatedTokens ?? '—' : preview.narratorEstimatedTokens} Token（粗估，具体以模型为准）。当前为{preview.playProfile === 'low' ? '低' : preview.playProfile === 'high' ? '高' : '中'}档。</small>
+          <small>游玩档位只调整工程里已有资料的装配量；如果整书分析尚未提取某段事实，选择高档也不会补出该事实。人物自由文本的知情边界仍需核对。</small>
         </section>
         <section><small>02 · 世界设定／世界书</small><h2>选择进入故事的时刻</h2><p>{preview.projectName}</p>
           <label>搜索进入时间<input type="search" value={entryFilter} onChange={event => setEntryFilter(event.target.value)} placeholder="输入事件名称或原文段落号" /></label>
           <label>进入时间<select aria-label="进入时间" disabled={busy || entriesLoading} value={selectedEntryId ?? ''} onChange={event => {
             const entry = entries.find(item => item.eventId === event.target.value);
-            if (entry) { setEntryFilter(''); setPlaceFilter(''); setOptions(current => ({ ...current, entryEventId: entry.eventId, startingPlaceId: undefined })); }
+             if (entry) { setEntryFilter(''); setPlaceFilter(''); setOptions(current => ({ ...current, entryEventId: entry.eventId, startingPlaceId: undefined, characterId: undefined,
+               persona: current.persona.identityId ? { name: '', description: '' } : current.persona })); }
           }}>{entriesLoading && <option value={preview.entryEventId}>正在核对进入时间…</option>}{shownEntries.map(entry => <option key={entry.eventId} value={entry.eventId}>段落 {entry.ordinal} · {entry.title}{entry.prepared ? ' · 已备好' : ''}</option>)}</select></label>
           <small>{entriesLoading ? '正在核对当前工程的事件。' : `已确认事件 ${entries.length} 个；当前显示 ${shownEntries.length} 个。可按名称或段落搜索，选择后用已有资料离线准备。原文段落顺序不一定等于故事世界的时间顺序。`}</small>
           <label>筛选已揭示地点<input type="search" value={placeFilter} onChange={event => setPlaceFilter(event.target.value)} placeholder={`输入地点名称 · 当前可选 ${preview.availablePlaces.length} 处`} /></label>
           <label>玩家选择的开场地点<select disabled={busy} value={options.startingPlaceId ?? ''} onChange={event => setOptions(current => ({ ...current, startingPlaceId: event.target.value || undefined }))}><option value="">不指定 · 由当前剧情决定</option>{shownPlaces.map(place => <option key={place.id} value={place.id}>{place.name}</option>)}{options.startingPlaceId && !shownPlaces.some(place => place.id === options.startingPlaceId) && preview.availablePlaces.filter(place => place.id === options.startingPlaceId).map(place => <option key={place.id} value={place.id}>{place.name}</option>)}</select></label>
           <small>这是玩家游玩分支的入场选择，不会把该地点写成原著事件的确认地点。仅列出当前时间已揭示、已确认的地点。</small>
           {preview.startingScene && <details><summary>查看原著开场资料 · {preview.startingScene.state === 'complete' ? '事件已揭示' : preview.startingScene.state === 'partial' ? '部分已揭示' : '资料待确认'}</summary><p style={{ whiteSpace: 'pre-wrap' }}>{preview.startingScene.context || '没有可安全带入的事件片段。'}</p><p>原著确认地点：{preview.startingScene.locations.join('、') || '尚未确认'}</p><small>后续剧情以你的行动和当前会话为准。</small></details>}
-          <p>{preview.worldEntryCount} 条独立运行资料，按当前对话触发。</p><small>当轮世界资料上限 {preview.worldTokenBudget} Token。</small></section>
+          <p>{preview.worldEntryCount} 条独立运行资料，按当前对话触发。</p><small>当轮世界资料上限 {preview.worldTokenBudget} Token。</small>
+          {preview.ruleKinshipPairCount > 0 && <small role="note">当前时间前有 {preview.ruleKinshipPairCount} 组由本地规则提出并已确认的亲属关系。旧规则曾出现词语靠近人名就误判的情况，建议在关系图中核对后再游玩；此处不会改动审核结果。</small>}</section>
         <section className="play-persona"><small>03 · 我的身份</small><h2>你是谁，由你决定</h2>
           <label>进入方式<select disabled={busy} value={options.persona.identityId ?? ''} onChange={event => {
             const character = preview.characters.find(item => item.identityId === event.target.value);

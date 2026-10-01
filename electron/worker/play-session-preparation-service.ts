@@ -9,6 +9,8 @@ import {
 import { buildSessionAssemblyPlan, type SessionAssemblyPlan } from '../../src/shared/play-session-assembly';
 import { compactRuntimeCharacter, type RuntimeCharacter } from '../../src/shared/runtime-character';
 import { playSessionOptionsSchema, type PlaySessionOptions } from '../../src/shared/play-session-options';
+import { playProfileSettings } from '../../src/shared/play-profile';
+import { estimateDryRunTokens } from '../../src/shared/dry-run-context-assembler';
 import type { ProjectStore } from './project-store';
 import { readStartingScene } from './play-starting-scene';
 import { PlaceService } from './place-service';
@@ -28,6 +30,7 @@ export class PlaySessionPreparationService {
   constructor(private readonly validation: PlayableBundleValidationService, private readonly store?: ProjectStore) {}
 
   async prepare(packageDirectory: string, requested?: PlaySessionOptions): Promise<SessionAssemblyPlan> {
+    const profile = playSessionOptionsSchema.parse(requested ?? { mode: 'narrator', persona: { name: '旅人', description: '' } }).playProfile ?? 'medium';
     const report = await this.validation.validate(packageDirectory);
     if (!report.valid || !report.currentProjectMatch || !report.manifest) {
       const reason = report.issues.find(issue => issue.severity === 'error')?.message
@@ -57,13 +60,14 @@ export class PlaySessionPreparationService {
     const characters: RuntimeCharacter[] = [];
     for (const file of report.manifest.files.filter(file => file.kind === 'character-card')) {
       if (!file.identityId) throw new Error('人物卡缺少身份标识。');
-      characters.push(compactRuntimeCharacter(file.identityId, tavernCardV2Schema.parse(await readAsset('character-card', file.identityId))));
+      characters.push(compactRuntimeCharacter(file.identityId, tavernCardV2Schema.parse(await readAsset('character-card', file.identityId)), profile));
     }
     return this.finalize(report.manifest, relationships, places, characters, requested);
   }
 
   /** Assemble another confirmed event from reviewed source data without changing saved drafts or exports. */
   prepareLive(entryEventId: string, requested?: PlaySessionOptions): SessionAssemblyPlan {
+    const profile = playSessionOptionsSchema.parse(requested ?? { mode: 'narrator', persona: { name: '旅人', description: '' } }).playProfile ?? 'medium';
     if (!this.store) throw new Error('当前工程不可用，无法选择其他进入时间。');
     const project = this.store.getSummary();
     if (!project?.activeRevisionId) throw new Error('请先导入并确认小说工程。');
@@ -84,7 +88,7 @@ export class PlaySessionPreparationService {
       (character.importanceTier === 'core' || character.importanceTier === 'important')
       && character.values.length > 0 && namedBeforeEntry.has(character.identityId));
     const characters = eligible.map(character => {
-      const lines = character.values.slice(0, 45).map(value =>
+      const lines = character.values.slice(0, profile === 'high' ? 90 : 45).map(value =>
         `${value.predicate}：${value.value ?? `尚未确认${value.alternatives.length ? `（可能为 ${value.alternatives.join(' / ')}）` : ''}`}`);
       const source: TavernCardV2 = {
         spec: 'chara_card_v2', spec_version: '2.0',
@@ -101,7 +105,7 @@ export class PlaySessionPreparationService {
             identity_id: character.identityId, entry_event_id: entryEventId } },
         },
       };
-      return compactRuntimeCharacter(character.identityId, source);
+      return compactRuntimeCharacter(character.identityId, source, profile);
     });
     const relationFingerprint = relationships.extensions.novel_world_compiler.graph_source_fingerprint;
     const placeFingerprint = places.extensions.novel_world_compiler.map_source_fingerprint;
@@ -124,6 +128,9 @@ export class PlaySessionPreparationService {
     places: SillyTavernPlaceWorldInfoExport, characters: RuntimeCharacter[], requested?: PlaySessionOptions): SessionAssemblyPlan {
     const plan = buildSessionAssemblyPlan(manifest, relationships, places);
     const options = playSessionOptionsSchema.parse(requested ?? { mode: 'narrator', persona: { name: '旅人', description: '' } });
+    const profile = options.playProfile ?? 'medium';
+    options.playProfile = profile;
+    plan.sessionWorldBook.token_budget = playProfileSettings(profile).worldTokenBudget;
     if (options.entryEventId && options.entryEventId !== manifest.entry_point.event_id) throw new Error('所选进入时间与游玩资料不一致，请重新选择。');
     if (options.mode === 'narrator') delete options.characterId;
     const selected = options.mode === 'character' ? characters.find(item => item.identityId === options.characterId) : undefined;
@@ -135,8 +142,6 @@ export class PlaySessionPreparationService {
     }
     if (player) options.persona = { ...options.persona, name: player.name,
       description: [player.card.data.description, player.card.data.personality].join('\n') };
-    const narratorChars = plan.narratorCard.data.description.length + plan.narratorCard.data.personality.length
-      + plan.narratorCard.data.scenario.length + plan.narratorCard.data.system_prompt.length;
     if (selected) plan.narratorCard = selected.card;
     const availablePlaces = this.store ? new PlaceService(this.store)
       .getNarrativeMapProjection(manifest.entry_point.narrative_ordinal).nodes
@@ -152,6 +157,9 @@ export class PlaySessionPreparationService {
       plan.narratorCard.data.scenario = `${plan.narratorCard.data.scenario}\n${cue}`;
       plan.narratorCard.data.first_mes = `*你选择从“${chosenLocation.name}”开始。请说明你的身份与第一个行动。*`;
     }
+    const narratorText = [plan.narratorCard.data.description, plan.narratorCard.data.personality,
+      plan.narratorCard.data.scenario, plan.narratorCard.data.mes_example, plan.narratorCard.data.system_prompt].join('\n');
+    const narratorChars = narratorText.length;
     const variant = createHash('sha256').update(JSON.stringify({ policy: 'runtime-character.v3-bound-names', options, startingScene })).digest('hex').slice(0, 20);
     plan.resourceKey += `:runtime-v1:${variant}`;
     const identityOptions = { ...options };
@@ -193,15 +201,23 @@ export class PlaySessionPreparationService {
     for (const entry of Object.values(plan.sessionWorldBook.entries)) {
       Object.assign(entry, { excludeRecursion: true, preventRecursion: true, ignoreBudget: false, scanDepth: 2, matchWholeWords: false });
     }
+    const ruleKinshipPairCount = this.store ? Number((this.store.get().db.prepare(`SELECT COUNT(DISTINCT source_identity_id || ':' || target_identity_id || ':' || relationship_type) AS value
+      FROM character_relationships WHERE revision_id = ? AND review_status = 'confirmed'
+        AND extraction_method = 'rule' AND relationship_type IN ('父子/父女', '母子/母女', '兄弟', '姐妹', '夫妻')
+        AND first_revealed_ordinal <= ?`).get(manifest.project.revision_id, manifest.entry_point.narrative_ordinal) as { value: number }).value) : 0;
     plan.preview = {
       startingScene,
       projectId: manifest.project.id, projectName: manifest.project.name,
       entryEventId: manifest.entry_point.event_id,
       entryTitle: manifest.entry_point.title, entryOrdinal: manifest.entry_point.narrative_ordinal,
-      worldEntryCount: uid, worldTokenBudget: plan.sessionWorldBook.token_budget, narratorChars,
+      worldEntryCount: uid, worldTokenBudget: plan.sessionWorldBook.token_budget, narratorChars, ruleKinshipPairCount,
+      narratorEstimatedTokens: estimateDryRunTokens(narratorText), playProfile: profile,
       availablePlaces,
       characters: characters.map(item => ({ identityId: item.identityId, name: item.name, sourceChars: item.sourceChars,
-        runtimeChars: item.runtimeChars, personaDescription: [item.card.data.description, item.card.data.personality].join('\n') })),
+        runtimeChars: item.runtimeChars,
+        runtimeEstimatedTokens: estimateDryRunTokens([item.card.data.description, item.card.data.personality,
+          item.card.data.scenario, item.card.data.mes_example, item.card.data.system_prompt].join('\n')),
+        personaDescription: [item.card.data.description, item.card.data.personality].join('\n') })),
     };
     return plan;
   }

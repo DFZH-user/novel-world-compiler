@@ -28,6 +28,7 @@ import { SillyTavernManager } from './sillytavern-manager';
 import { SillyTavernApi } from './sillytavern-api';
 import { SillyTavernAssembly } from './sillytavern-assembly';
 import { playSessionOptionsSchema, type PlaySessionOptions } from '../../src/shared/play-session-options';
+import { readTokenUsageSummary } from './token-usage-ledger';
 
 const worker = new WorkerClient();
 const characterRunner = new CharacterScanRunner(worker);
@@ -147,8 +148,9 @@ function registerIpc(): void {
     return events.map(event => ({ eventId: event.id, title: event.title,
       ordinal: event.narrativeStartOrdinal, prepared: ready.has(event.id) }));
   });
-  ipcMain.handle('project:play-prepare', async (_event, id: string, entryEventId?: string) => {
-    const plan = await prepareBook(String(id), undefined, entryEventId ? String(entryEventId) : undefined);
+  ipcMain.handle('project:play-prepare', async (_event, id: string, entryEventId?: string, rawOptions?: unknown) => {
+    const options = rawOptions ? playSessionOptionsSchema.parse(rawOptions) : undefined;
+    const plan = await prepareBook(String(id), options, entryEventId ? String(entryEventId) : undefined);
     if (!plan.preview) throw new Error('无法生成游玩摘要。');
     return plan.preview;
   });
@@ -330,10 +332,14 @@ function registerIpc(): void {
     return jobs;
   });
   ipcMain.handle('workflows:foundation-list', () => worker.request('workflows:foundation-list', undefined));
-  ipcMain.handle('workflows:foundation-start', async (_event, options: { model?: unknown; profile?: unknown }) => {
+  ipcMain.handle('workflows:foundation-usage', (_event, runId: string) => readTokenUsageSummary(String(runId)));
+  ipcMain.handle('workflows:foundation-budget', (_event, runId: string, tokenBudget: number | null) =>
+    worker.request('workflows:foundation-budget', { runId: String(runId), tokenBudget }));
+  ipcMain.handle('workflows:foundation-start', async (_event, options: { model?: unknown; profile?: unknown; tokenBudget?: unknown }) => {
     const start = await worker.request('workflows:foundation-create', {
       model: String(options?.model ?? '').trim(),
-      profile: String(options?.profile ?? 'foundation-v1').trim() || 'foundation-v1',
+      profile: String(options?.profile ?? 'medium').trim() || 'medium',
+      tokenBudget: options?.tokenBudget == null ? null : Number(options.tokenBudget),
     });
     if (start.state === 'running') foundationWorkflowRunner.start(start.runId);
     return start;
@@ -602,9 +608,9 @@ function registerIpc(): void {
     const requested = options as { extractorVersion?: unknown; mode?: unknown; model?: unknown; promptVersion?: unknown } | undefined;
     const mode = requested?.mode === 'model' ? 'model' as const : 'local' as const;
     const model = mode === 'model' ? String(requested?.model ?? '').trim() : undefined;
-    const promptVersion = String(requested?.promptVersion ?? (mode === 'model' ? 'relationship-model.v1' : 'relationship-local.v1')).trim();
-    const extractorVersion = String(requested?.extractorVersion ?? (mode === 'model' ? `model:${model}:${promptVersion}` : 'local-v1')).trim()
-      || (mode === 'model' ? `model:${model}:${promptVersion}` : 'local-v1');
+    const promptVersion = String(requested?.promptVersion ?? (mode === 'model' ? 'relationship-model.v1' : 'relationship-local.v2')).trim();
+    const extractorVersion = String(requested?.extractorVersion ?? (mode === 'model' ? `model:${model}:${promptVersion}` : 'local-v2')).trim()
+      || (mode === 'model' ? `model:${model}:${promptVersion}` : 'local-v2');
     const start = await worker.request('relationships:scan-create', { extractorVersion, mode, model, promptVersion });
     if (start.state === 'running') (mode === 'model' ? relationshipModelRunner : relationshipScanRunner).start(start.jobId);
     return start;
